@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from agent.config import Settings
 from agent.harness.audit import RunContext
 from agent.harness.errors import BudgetExceeded, InvalidRequest, NovaError
-from agent.harness.middleware import EventSink, RunMiddleware
+from agent.harness.middleware import EventSink, RunMiddleware, SubagentLimits
 from agent.runtime import Runtime, make_runtime
 from agent.tools.planning import make_planning_tools
 from agent.tools.skill_tools import make_source_tools
@@ -81,8 +81,11 @@ def load_prompt(name: str) -> str:
 
 def build_agent(runtime: Runtime, *, require_approval: bool, checkpointer: BaseCheckpointSaver,
                 store: BaseStore | None = None):
+    limits = SubagentLimits()
+
     def middleware(agent: str) -> RunMiddleware:
-        return RunMiddleware(runtime.budget, agent=agent, run_id=runtime.context.run_id, sink=runtime.sink)
+        return RunMiddleware(runtime.budget, agent=agent, run_id=runtime.context.run_id, sink=runtime.sink,
+                             limits=limits if agent == "main" else None)
 
     run_sql = make_run_readonly_sql(runtime.executor, policy=runtime.policy, context=runtime.context,
                                     budget=runtime.budget)

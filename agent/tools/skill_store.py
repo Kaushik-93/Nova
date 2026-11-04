@@ -213,6 +213,23 @@ class SkillStore:
                  "status": front.status.value, "fingerprint": front.schema_fingerprint, "path": str(directory),
                  "generated_at": front.generated_at, "reviewed_by": front.reviewed_by})
 
+    def approve(self, slug: str, *, reviewed_by: str) -> SkillFrontmatter:
+        """Mark a skill and all its metrics as reviewed. From then on re-profiling can only
+        propose changes to them."""
+        directory = self.path(slug)
+        front, body = parse_frontmatter((directory / SKILL_FILE).read_text())
+        layer = self.read_semantic_layer(slug)
+        for metric in layer.metrics.values():
+            metric.status, metric.reviewed_by = DefinitionStatus.REVIEWED, reviewed_by
+        approved = front.model_copy(update={"status": SkillStatus.REVIEWED, "reviewed_by": reviewed_by,
+                                            "version": front.version + 1})
+        (directory / SKILL_FILE).write_text(render_frontmatter(approved) + body)
+        (directory / "metrics.yaml").write_text(yaml.safe_dump(layer.model_dump(mode="json"), sort_keys=False))
+        with (directory / "CHANGELOG.md").open("a") as changelog:
+            changelog.write(f"## v{approved.version}\n\nApproved by {reviewed_by}.\n\n")
+        self._track(approved, directory)
+        return approved
+
     def propose_metric(self, slug: str, key: str, metric: Metric, *, reason: str) -> None:
         """Record a suggested change for a person to accept or reject. Nothing the agent
         relies on changes until someone does."""

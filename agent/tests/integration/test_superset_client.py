@@ -154,9 +154,9 @@ def test_time_grain_really_groups_the_data(superset, built):
     dataset = built.dataset()
     span = "2024-01-01 : 2026-01-01"
     monthly = built.chart(ChartSpec(key="m", title="m", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
-                                    time_grain=TimeGrain.MONTH, time_range=span), dataset)
+                                    time_grain=TimeGrain.MONTH, time_range=span, fixed_dates=True), dataset)
     quarterly = built.chart(ChartSpec(key="q", title="q", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
-                                      time_grain=TimeGrain.QUARTER, time_range=span), dataset)
+                                      time_grain=TimeGrain.QUARTER, time_range=span, fixed_dates=True), dataset)
 
     months, quarters = superset.chart_data(monthly.id), superset.chart_data(quarterly.id)
     assert months.row_count == 24
@@ -213,7 +213,8 @@ def test_periods_are_honoured_when_the_partial_period_is_included(superset, buil
 
 def test_chart_data_reports_the_exact_window_it_covers(superset, built):
     chart = built.chart(ChartSpec(key="w", title="t", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
-                                  time_grain=TimeGrain.MONTH, time_range="2025-01-01 : 2025-04-01"), built.dataset())
+                                  time_grain=TimeGrain.MONTH, time_range="2025-01-01 : 2025-04-01", fixed_dates=True),
+                        built.dataset())
     data = superset.chart_data(chart.id)
     assert data.window_start == "2025-01-01 00:00:00"
     assert data.window_end == "2025-04-01 00:00:00"

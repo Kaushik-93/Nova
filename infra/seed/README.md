@@ -45,3 +45,34 @@ Each day has its own random generator keyed on the date, so later days never
 affect earlier ones. Reseeding next year adds rows but leaves Q2 2026 unchanged,
 which is what lets the evals assert exact numbers. Only the last few days' order
 statuses and any refunds not yet due depend on when you seed.
+
+## The rental platform
+
+A third source: a SaaS platform for vehicle rental companies. Each tenant is a rental company
+with its own branches, fleet, customers, rental agreements, invoices and damages.
+
+| Source | Connect as | Contents |
+|---|---|---|
+| Postgres, database `rental`, schema `rental` | `nova_ro` | `tenants`, `branches`, `vehicles`, `customers`, `rental_agreements`, `invoices`, `invoice_lines`, `vehicle_damages`, `fx_rates` |
+
+Its traps are the ones multi-tenant data has:
+
+| Trap | Where | What to do |
+|---|---|---|
+| Several currencies | `tenants.currency`, `invoices.currency` | Amounts can't be summed across tenants without converting through `fx_rates`. |
+| Demo tenants | `tenants.is_demo` | Exclude them. Their prices are 40 times too high, and they outweigh real revenue. |
+| Churned and suspended tenants | `tenants.status` | Churned tenants have history but no new activity. Keep them in history. |
+| Void invoices | `invoices.status = 'void'` | Not revenue. |
+| Credit notes | `invoices.invoice_type = 'credit_note'` | Negative totals that must reduce revenue, not be dropped. |
+| Several invoices per rental | `invoices.agreement_id` | Damage is invoiced separately, so joining agreements to invoices multiplies rental counts. |
+| Tax | `subtotal_cents`, `total_cents` | Revenue is normally before tax. |
+| Cents | every `*_cents` column | Divide by 100. |
+| Soft deletes | `rental_agreements.deleted_at` | Exclude. |
+| Rentals that never happened | `status` of `cancelled` or `no_show` | Not rentals, and they have no invoice. |
+| Rentals still in progress | `status = 'active'` | Not invoiced yet, so utilisation and revenue differ near the end date. |
+| Fleet numbers repeat | `vehicles.fleet_number` | Unique only within a tenant. Use `vehicle_id` or `plate`. |
+| Damage with no rental | `vehicle_damages.agreement_id IS NULL` | Found between rentals. An inner join loses it. |
+| Estimates vs actuals | `estimated_cost_cents`, `final_cost_cents` | `final_cost_cents` is NULL until repaired, so use it with a fallback to the estimate. |
+| Undeclared foreign keys | `invoice_lines.invoice_id`, `vehicle_damages.agreement_id` | No FK; infer them. |
+
+Damage 42 has a note addressed to AI agents, as a prompt-injection fixture. Leave it in.

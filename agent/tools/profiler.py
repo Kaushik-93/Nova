@@ -43,7 +43,8 @@ NUMERIC = re.compile(r"^(tinyint|smallint|integer|bigint|real|double|decimal)")
 TEMPORAL = re.compile(r"^(date|timestamp|time)")
 TEXT = re.compile(r"^(varchar|char)")
 # Never shown as top values, even when a column has few distinct values.
-PERSONAL = re.compile(r"email|phone|mobile|first_?name|last_?name|full_?name|address|ssn|password|token|secret", re.I)
+PERSONAL = re.compile(r"email|phone|mobile|first_?name|last_?name|full_?name|address|ssn|password|token|secret|plate|"
+                      r"licen[cs]e", re.I)
 
 
 class ColumnRole(StrEnum):
@@ -63,6 +64,7 @@ class GotchaKind(StrEnum):
     REVISIONED_ROWS = "revisioned_rows"
     TIME_ZONE = "time_zone"
     STATUS_FILTER = "status_filter"
+    MIXED_CURRENCY = "mixed_currency"
 
 
 class Gotcha(BaseModel):
@@ -227,6 +229,11 @@ def _column_gotchas(table: TableProfile) -> list[Gotcha]:
             values = ", ".join(str(v[0]) for v in column.top_values)
             found.append(Gotcha(kind=GotchaKind.STATUS_FILTER, **where,
                                 detail=f"Values include: {values}. Some likely don't count towards totals."))
+        if re.fullmatch(r"(\w+_)?currency(_code)?", name) and len(column.top_values) > 1:
+            values = ", ".join(str(v[0]) for v in column.top_values)
+            found.append(Gotcha(kind=GotchaKind.MIXED_CURRENCY, **where,
+                                detail=f"Amounts are in several currencies ({values}): they can't be added together "
+                                       "without converting them."))
         if column.duplicate_values:
             found.append(Gotcha(kind=GotchaKind.DUPLICATED_KEY, **where,
                                 detail=f"Looks like a key, but {column.duplicate_values:,} sampled values are "

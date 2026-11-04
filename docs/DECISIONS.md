@@ -175,8 +175,8 @@ suite is free and works with no key. Evals in Phase 9 need the same decision.
 
 ## D-026: Agents finish through a tool the harness controls
 
-`finish_dashboard` runs every chart itself and refuses a dashboard with a failing chart, or
-with charts covering different periods. The model can't declare success, and can't skip
+`finish_dashboard` runs every chart itself and refuses a dashboard with a failing chart, a
+filter that can't reach a chart, or charts on one dataset covering different periods. The model can't declare success, and can't skip
 the check. As with `submit_skill`, failures go back as feedback a limited number of times,
 and what still fails is reported to the user.
 
@@ -224,3 +224,52 @@ reach the same objects without any lookup table.
 An earlier run spent a repair round on an axis label. Only something that makes a number
 wrong, or stops a chart being read, is worth another round. The label itself was fixed in
 code: each time grain now has an explicit format.
+
+## D-034: A check too strict is worse than none
+
+Requiring every chart to have a time window refused a count of today's fleet, which rightly
+has none. To get past the check the agent hard-coded dates into its SQL, the one thing it had
+been told never to do, and the dashboard would have gone stale. Charts are now compared only
+with charts on the same dataset, and fixed dates in dataset SQL are refused. When a harness
+rule is wrong, the agent will work around it, so each rule has to allow every legitimate case.
+
+## D-035: Limits belong in code
+
+"At most two repair rounds" in a prompt didn't hold: one run went nine rounds, mostly over
+label overlap. `SubagentLimits` now refuses further delegation, and the agent is told to finish
+and report what's open.
+
+## D-036: A dashboard filter is checked for reach
+
+Superset applies a dashboard filter by column name, and silently skips a chart whose dataset
+lacks that column. That chart keeps showing every tenant under a filter saying otherwise, so
+`finish_dashboard` refuses it.
+
+A tenant filter is a convenience, not security: anyone can clear it. Where one tenant must not
+see another's data, that takes row-level security in the guest token, which comes with auth.
+
+## D-037: Run steps are stored, then streamed
+
+Each step is written to Postgres and the stream reads from there, so a refresh or dropped
+connection loses nothing, and a past run can be inspected later. It adds about half a second of
+delay, which doesn't matter at this pace.
+
+## D-038: The live view sees more than the logs
+
+The JSON logs get timings and names only. Tool arguments and what the agents said can hold
+data from sources, so those go only to the run's own events, for the person who started it.
+
+## D-039: The UI tells the agent what's selected
+
+Filter choices live inside the Superset iframe. With `emitDataMasks` the embedded SDK reports
+them to the page, which shows them and adds them to the next message, because the agent can't
+see inside the dashboard.
+
+## D-040: Fixed dates are refused, and windows must end on a boundary
+
+A chart designer copied "2025-11-01 through 2026-10-31" from the plan into every chart. The
+prompt forbade it, and it cost twice over: Superset excludes the end, so 31 October vanished from
+months labelled complete, and the dashboard would have gone stale. The verifier agreed with it,
+because D-027 has it check the window the chart reports. So `ChartSpec` refuses dates unless
+`fixed_dates` says the user asked for them, and `finish_dashboard` refuses a window ending part
+way through its time grain, which is a check no agent's judgement is involved in.

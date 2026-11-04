@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 from agent.config import Settings
 from agent.harness.budgets import BudgetLimits, RunBudget
 from agent.harness.errors import BudgetExceeded, InvalidRequest
-from agent.harness.middleware import RunMiddleware
+from agent.harness.middleware import RunMiddleware, SubagentLimits, describe_call
 from agent.llm import build_model
 
 
@@ -81,7 +81,8 @@ def test_model_steps_are_traced_with_who_tokens_and_tools():
     events = []
     middleware = RunMiddleware(RunBudget(BudgetLimits()), agent="sql_author", run_id="r1", sink=events.append)
     model_call(middleware, reply(150, reasoning=40, tools=["run_readonly_sql"]))
-    event = events[0]
+    assert events[0]["event"] == "model_start", "so the view can show a model call in progress"
+    event = events[1]
     assert (event["event"], event["agent"], event["run_id"]) == ("model", "sql_author", "r1")
     assert event["tokens"] == 150
     assert event["reasoning_tokens"] == 40
@@ -97,9 +98,58 @@ def test_tool_steps_are_traced_with_their_outcome():
                                                            ("tool_end", False)]
 
 
-def test_traces_hold_no_arguments_or_results():
+def test_arguments_and_text_stay_out_of_the_logs(caplog):
+    middleware = RunMiddleware(RunBudget(BudgetLimits()))
+    with caplog.at_level("INFO", logger="nova.trace"):
+        model_call(middleware, AIMessage("private text"))
+        tool_call(middleware, "run_readonly_sql", ToolMessage("private data", tool_call_id="1"))
+    logged = " ".join(str(vars(record)) for record in caplog.records)
+    assert "private" not in logged and "SELECT secret" not in logged
+
+
+def test_the_live_view_gets_the_text_and_what_a_tool_is_doing():
     events = []
     middleware = RunMiddleware(RunBudget(BudgetLimits()), sink=events.append)
-    model_call(middleware, reply(1, tools=["x"]))
-    tool_call(middleware, "x", ToolMessage("private data", tool_call_id="1"))
-    assert "secret" not in str(events) and "private data" not in str(events)
+    model_call(middleware, AIMessage("Checking the totals"))
+    tool_call(middleware, "run_readonly_sql", ToolMessage("ok", tool_call_id="1"))
+    assert events[1]["text"] == "Checking the totals"
+    assert events[2]["detail"] == "SELECT secret"
+
+
+def test_a_failing_tool_reports_why():
+    events = []
+    tool_call(RunMiddleware(RunBudget(BudgetLimits()), sink=events.append), "x", ToolMessage("FAILED [sql]: bad", tool_call_id="1"))
+    assert events[-1]["result"] == "FAILED [sql]: bad"
+
+
+@pytest.mark.parametrize("name, args, expected", [
+    ("load_skill", {"name": "demo-rental"}, "demo-rental"),
+    ("task", {"subagent_type": "verifier", "description": "Check it"}, "verifier: Check it"),
+    ("superset_create_chart", {"spec": {"title": "Revenue"}}, "Revenue"),
+    ("run_readonly_sql", {"sql": "SELECT\n  1"}, "SELECT 1"),
+    ("something_else", {"secret": "x"}, ""),
+])
+def test_tool_calls_are_described_in_a_line(name, args, expected):
+    assert describe_call(name, args) == expected
+
+
+def delegate(middleware, subagent):
+    request = SimpleNamespace(tool_call={"name": "task", "id": "1", "args": {"subagent_type": subagent}})
+    calls = []
+    result = middleware.wrap_tool_call(request, lambda r: calls.append(r) or ToolMessage("done", tool_call_id="1"))
+    return result, calls
+
+
+def test_a_subagent_is_refused_past_its_limit():
+    middleware = RunMiddleware(RunBudget(BudgetLimits()), limits=SubagentLimits({"verifier": 2}))
+    for _ in range(2):
+        assert delegate(middleware, "verifier")[1], "allowed"
+    result, calls = delegate(middleware, "verifier")
+    assert calls == []
+    assert "Finish now" in result.content
+
+
+def test_limits_are_per_subagent():
+    middleware = RunMiddleware(RunBudget(BudgetLimits()), limits=SubagentLimits({"verifier": 1, "sql_author": 1}))
+    delegate(middleware, "verifier")
+    assert delegate(middleware, "sql_author")[1]

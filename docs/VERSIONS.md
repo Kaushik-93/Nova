@@ -28,6 +28,7 @@ registry, rather than from memory.
 | redis | 8.1.0 | tools |
 
 | deepagents | 0.7.32 | agent |
+| fastapi | 0.162.0 | agent |
 | langchain | 1.4.8 | agent |
 | langchain-anthropic | 1.7.9 | agent |
 | langchain-openai | 1.7.3 | agent |
@@ -35,6 +36,8 @@ registry, rather than from memory.
 | langgraph-checkpoint-postgres | 3.2.0 | agent |
 | playwright | 1.64.1 | agent |
 | prison | 0.2.1 | agent |
+| sse-starlette | 3.6.0 | agent |
+| uvicorn | 0.54.0 | agent |
 | psycopg-pool | 3.3.3 | agent |
 | python-json-logger | 4.2.0 | agent |
 | sqlglot | 30.29.0 | agent |
@@ -50,13 +53,10 @@ Verified for later phases, and pinned when they start:
 
 | Package | Version |
 |---|---|
-| fastapi | 0.162.0 |
-| uvicorn | 0.54.0 |
-| sse-starlette | 3.6.0 |
 | cryptography | 50.0.2 |
 | langsmith | 0.14.17 |
 
-## JavaScript (verified, pinned in Phase 7)
+## JavaScript (pinned in `ui/package.json`)
 
 | Package | Version |
 |---|---|
@@ -160,3 +160,5 @@ Verified for later phases, and pinned when they start:
 **@superset-ui/embedded-sdk 0.4.0**
 - `embedDashboard({ id, supersetDomain, mountPoint, fetchGuestToken, ... })`, and
   `setThemeMode('dark' | 'default' | 'system')` on the returned object.
+- With `dashboardUiConfig.emitDataMasks: true`, `observeDataMask` reports filter selections to
+  the host page, keyed by native filter id.

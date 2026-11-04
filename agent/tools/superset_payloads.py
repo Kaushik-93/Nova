@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from enum import StrEnum
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -20,6 +21,9 @@ UUID_NAMESPACE = uuid5(NAMESPACE_URL, "https://nova.local/superset")
 
 GRID_COLUMNS = 12
 DEFAULT_ROW_HEIGHT = 50
+MAX_KPIS_PER_ROW = 4
+MAX_CHARTS_PER_ROW = 2
+KPI_TYPES = {"big_number_total", "big_number"}
 
 
 def stable_uuid(kind: str, key: str) -> UUID:
@@ -55,6 +59,7 @@ GRAIN_UNITS = {TimeGrain.DAY: "day", TimeGrain.WEEK: "week", TimeGrain.MONTH: "m
 GRAIN_FORMATS = {TimeGrain.DAY: "%b %d", TimeGrain.WEEK: "%b %d", TimeGrain.MONTH: "%b %Y",
                  TimeGrain.QUARTER: "%Y Q%q", TimeGrain.YEAR: "%Y"}
 NO_FILTER = "No filter"
+FIXED_DATE = re.compile(r"\b(19|20)\d{2}-\d{2}")
 # Superset has nowhere else to keep a chart's stable key, and a follow-up request needs it
 # to update the chart rather than make another one.
 CHART_KEY_PREFIX = "Nova chart key: "
@@ -97,6 +102,7 @@ class ChartSpec(BaseModel):
     periods: int | None = Field(default=None, ge=1, le=240,
                                 description="How many complete periods of time_grain to show, such as 12 months")
     time_range: str = Field(default=NO_FILTER, description="An explicit Superset range. Prefer `periods`.")
+    fixed_dates: bool = Field(default=False, description="Set only if the user asked for specific dates")
     include_partial_period: bool = Field(default=False, description="Keep the period still in progress")
     row_limit: int = Field(default=1000, ge=1, le=50000)
     descending: bool = True
@@ -114,6 +120,10 @@ class ChartSpec(BaseModel):
             raise ValueError("bar needs a dimension or a time column for its x axis")
         if self.periods and not (self.time_column and self.time_grain):
             raise ValueError("periods needs time_column and time_grain")
+        if FIXED_DATE.search(self.time_range) and not self.fixed_dates:
+            raise ValueError("time_range holds fixed dates, which go stale, and whose end is excluded, so an "
+                             "inclusive end date loses its last day. Use `periods` for a rolling window. Set "
+                             "`fixed_dates` only if the user asked for specific dates.")
         return self
 
     @property
@@ -396,6 +406,15 @@ def fill_row(widths: list[int]) -> list[int]:
             break
         scaled[index] += 1
     return scaled
+
+
+def wrap_row(viz_types: list[str | None]) -> list[list[int]]:
+    """Split a row that's too crowded, returning positions in the original row. Dashboards
+    are often embedded beside other things, where four trends in a row leave each too
+    narrow for its title."""
+    limit = MAX_KPIS_PER_ROW if all(viz in KPI_TYPES for viz in viz_types) else MAX_CHARTS_PER_ROW
+    positions = list(range(len(viz_types)))
+    return [positions[start:start + limit] for start in range(0, len(positions), limit)]
 
 
 def rows_from_positions(positions: dict[str, Any]) -> list[list[ChartSlot]]:

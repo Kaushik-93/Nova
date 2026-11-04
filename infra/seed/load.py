@@ -19,6 +19,7 @@ import psycopg
 import pymysql
 from psycopg import sql
 
+from seed import rental_generate
 from seed.generate import INJECTED_COLUMN_COMMENT, SEED_VERSION, Dataset, generate
 
 HERE = Path(__file__).parent
@@ -35,6 +36,26 @@ SHOP_TABLES = {
     "order_items": ("order_item_id", "order_id", "product_id", "quantity", "unit_price_cents"),
     "refunds": ("refund_id", "order_id", "refund_ts", "amount_cents", "reason"),
 }
+RENTAL_TABLES = {
+    "tenants": ("tenant_id", "tenant_name", "country_code", "currency", "timezone", "plan", "status", "onboarded_on",
+                "offboarded_on", "is_demo"),
+    "branches": ("branch_id", "tenant_id", "branch_name", "city", "branch_type"),
+    "vehicles": ("vehicle_id", "tenant_id", "home_branch_id", "fleet_number", "plate", "make", "model", "model_year",
+                 "vehicle_class", "daily_rate_cents", "acquired_on", "retired_on", "status"),
+    "customers": ("customer_id", "tenant_id", "full_name", "email", "is_corporate", "created_on"),
+    "rental_agreements": ("agreement_id", "tenant_id", "agreement_number", "vehicle_id", "customer_id",
+                          "pickup_branch_id", "return_branch_id", "booked_at", "start_ts", "planned_end_ts",
+                          "returned_ts", "status", "daily_rate_cents", "odometer_out_km", "odometer_in_km",
+                          "booking_channel", "deleted_at"),
+    "invoices": ("invoice_id", "tenant_id", "agreement_id", "invoice_number", "invoice_type", "credits_invoice_id",
+                 "issued_on", "due_on", "paid_on", "status", "currency", "subtotal_cents", "tax_cents", "total_cents"),
+    "invoice_lines": ("invoice_line_id", "invoice_id", "line_type", "description", "quantity", "unit_cents",
+                      "amount_cents"),
+    "vehicle_damages": ("damage_id", "tenant_id", "vehicle_id", "agreement_id", "reported_on", "damage_type",
+                        "location_on_vehicle", "severity", "status", "estimated_cost_cents", "final_cost_cents",
+                        "repaired_on", "charged_to_customer", "insurance_claimed", "insurance_recovered_cents", "notes"),
+    "fx_rates": ("rate_month", "currency", "usd_per_unit"),
+}
 MARKETING_TABLES = {
     "channels": ("channel_code", "channel_name", "is_paid"),
     "campaigns": ("campaign_id", "campaign_code", "campaign_name", "channel_code", "target_region_code",
@@ -46,6 +67,16 @@ MARKETING_TABLES = {
 
 def connect_shop() -> psycopg.Connection:
     return psycopg.connect(host="demo-postgres", dbname="shop", user="shop_owner",
+                           password=os.environ["DEMO_OWNER_PASSWORD"], autocommit=False)
+
+
+def connect_rental() -> psycopg.Connection:
+    """The rental database lives on the same server as the shop, and is created here."""
+    with psycopg.connect(host="demo-postgres", dbname="shop", user="shop_owner",
+                         password=os.environ["DEMO_OWNER_PASSWORD"], autocommit=True) as admin:
+        if admin.execute("SELECT 1 FROM pg_database WHERE datname = 'rental'").fetchone() is None:
+            admin.execute("CREATE DATABASE rental")
+    return psycopg.connect(host="demo-postgres", dbname="rental", user="shop_owner",
                            password=os.environ["DEMO_OWNER_PASSWORD"], autocommit=False)
 
 
@@ -94,6 +125,52 @@ def load_shop(conn: psycopg.Connection, data: Dataset) -> None:
         cur.execute("CREATE SCHEMA _seed")
         cur.execute("CREATE TABLE _seed.meta (seed_version text NOT NULL, end_day date NOT NULL)")
         cur.execute("INSERT INTO _seed.meta VALUES (%s, %s)", (SEED_VERSION, data.end_day))
+    conn.commit()
+
+
+def rental_is_seeded(conn: psycopg.Connection) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('_seed.meta')")
+        if cur.fetchone()[0] is None:
+            conn.rollback()
+            return False
+        cur.execute("SELECT seed_version FROM _seed.meta")
+        row = cur.fetchone()
+    conn.rollback()
+    return row is not None and row[0] == rental_generate.SEED_VERSION
+
+
+def load_rental(conn: psycopg.Connection, data: rental_generate.RentalData) -> None:
+    rows = {"tenants": data.tenants, "branches": data.branches, "vehicles": data.vehicles, "customers": data.customers,
+            "rental_agreements": data.agreements, "invoices": data.invoices, "invoice_lines": data.invoice_lines,
+            "vehicle_damages": data.damages, "fx_rates": data.fx_rates}
+    with conn.cursor() as cur:
+        cur.execute((HERE / "rental_schema.sql").read_text())
+        for table, columns in RENTAL_TABLES.items():
+            copy_sql = sql.SQL("COPY rental.{} ({}) FROM STDIN").format(
+                sql.Identifier(table), sql.SQL(", ").join(map(sql.Identifier, columns)))
+            with cur.copy(copy_sql) as copy:
+                for row in rows[table]:
+                    copy.write_row(row)
+        cur.execute((HERE / "rental_indexes.sql").read_text())
+        cur.execute("ANALYZE")
+        cur.execute("DROP SCHEMA IF EXISTS _seed CASCADE")
+        cur.execute("CREATE SCHEMA _seed")
+        cur.execute("CREATE TABLE _seed.meta (seed_version text NOT NULL, end_day date NOT NULL)")
+        cur.execute("INSERT INTO _seed.meta VALUES (%s, %s)", (rental_generate.SEED_VERSION, data.end_day))
+    conn.commit()
+
+
+def apply_rental_readonly(conn: psycopg.Connection) -> None:
+    """nova_ro is a server-wide role, created with the shop. This grants it the rental data."""
+    with conn.cursor() as cur:
+        cur.execute(sql.SQL("""
+            REVOKE ALL ON DATABASE rental FROM PUBLIC;
+            REVOKE ALL ON SCHEMA public FROM PUBLIC;
+            GRANT CONNECT ON DATABASE rental TO {ro};
+            GRANT USAGE ON SCHEMA rental TO {ro};
+            GRANT SELECT ON ALL TABLES IN SCHEMA rental TO {ro};
+        """).format(ro=sql.Identifier(RO_USER)))
     conn.commit()
 
 
@@ -151,6 +228,7 @@ def main() -> None:
     ro_password = os.environ["DEMO_RO_PASSWORD"]
     shop = connect_shop()
     marketing = connect_marketing()
+    rental = connect_rental()
     try:
         if not args.force and shop_is_seeded(shop) and marketing_is_seeded(marketing):
             print(f"[seed] version {SEED_VERSION} already loaded; use --force to rebuild")
@@ -168,10 +246,24 @@ def main() -> None:
             print(f"[seed] loaded in {clock.monotonic() - started:.1f}s")
         apply_shop_readonly(shop, ro_password)
         apply_marketing_readonly(marketing, ro_password)
-        print(f"[seed] read-only user '{RO_USER}' ready on both sources")
+
+        if not args.force and rental_is_seeded(rental):
+            print(f"[seed] rental version {rental_generate.SEED_VERSION} already loaded")
+        else:
+            started = clock.monotonic()
+            end_day = datetime.now(timezone.utc).date() - timedelta(days=1)
+            data = rental_generate.generate(end_day)
+            print(f"[seed] rental through {end_day}: {len(data.tenants)} tenants, {len(data.vehicles):,} vehicles, "
+                  f"{len(data.agreements):,} agreements, {len(data.invoices):,} invoices, "
+                  f"{len(data.damages):,} damages in {clock.monotonic() - started:.1f}s")
+            load_rental(rental, data)
+            print(f"[seed] rental loaded in {clock.monotonic() - started:.1f}s")
+        apply_rental_readonly(rental)
+        print(f"[seed] read-only user '{RO_USER}' ready on all sources")
     finally:
         shop.close()
         marketing.close()
+        rental.close()
 
 
 if __name__ == "__main__":

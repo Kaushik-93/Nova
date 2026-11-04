@@ -50,3 +50,25 @@ CREATE TABLE IF NOT EXISTS dashboards (
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS runs (
+    run_id      text PRIMARY KEY,
+    thread_id   text NOT NULL,
+    prompt      text NOT NULL DEFAULT '',
+    status      text NOT NULL,
+    created_by  text NOT NULL,
+    started_at  timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz,
+    result      jsonb NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS runs_thread_idx ON runs (thread_id, started_at);
+
+CREATE TABLE IF NOT EXISTS run_events (
+    id     bigserial PRIMARY KEY,
+    run_id text NOT NULL REFERENCES runs ON DELETE CASCADE,
+    at     timestamptz NOT NULL DEFAULT now(),
+    event  jsonb NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS run_events_run_idx ON run_events (run_id, id);

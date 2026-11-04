@@ -44,6 +44,8 @@ def make_planning_tools(runtime: Runtime, *, require_approval: bool) -> list[Bas
     def submit_plan(**fields: Any) -> str:
         """Submit the dashboard plan before building anything. The user may edit it."""
         plan = DashboardPlan(**fields)
+        if runtime.sink:
+            runtime.sink({"event": "plan", "agent": "main", "plan": plan.model_dump(mode="json")})
         if require_approval:
             answer = interrupt({"type": "plan_approval", "plan": plan.model_dump(mode="json")})
             if isinstance(answer, dict) and answer.get("rejected"):

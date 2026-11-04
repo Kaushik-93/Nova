@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+}
+
+:root {
+  --background: #fafafa;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --border: #e4e4e7;
+  --primary: #4f46e5;
+  --primary-foreground: #ffffff;
+  --accent: #eef2ff;
+  --destructive: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+}
+
+.dark {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --border: #27272a;
+  --primary: #818cf8;
+  --primary-foreground: #18181b;
+  --accent: #1e1b4b;
+  --destructive: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+}
+
+html, body { height: 100%; }
+body { background: var(--background); color: var(--foreground); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+iframe { width: 100%; height: 100%; border: 0; }

@@ -313,6 +313,18 @@ def test_a_real_schema_change_makes_a_skill_stale_and_refresh_catches_up(store, 
     assert table(updated, "orders").sample_rows == orders_before.sample_rows
 
 
+def test_approving_marks_the_skill_and_its_metrics_reviewed(store, source_id, shop):
+    slug = fresh_slug()
+    write(store, source_id, shop, slug)
+
+    approved = store.approve(slug, reviewed_by="sam")
+
+    assert approved.status is SkillStatus.REVIEWED
+    assert approved.version == 2
+    assert store.read_semantic_layer(slug).metrics["revenue"].status is DefinitionStatus.REVIEWED
+    assert store.tracked(slug)["reviewed_by"] == "sam"
+
+
 def test_refreshing_a_fresh_skill_does_nothing(store, source_id, executor, shop):
     slug = fresh_slug()
     write(store, source_id, shop, slug)

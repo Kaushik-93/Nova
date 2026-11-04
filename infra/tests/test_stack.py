@@ -234,7 +234,7 @@ def test_mysql_read_only_user_cannot_write(statement):
 
 def test_only_the_demo_catalogs_are_exposed(trino_cursor):
     trino_cursor.execute("SHOW CATALOGS")
-    assert {row[0] for row in trino_cursor.fetchall()} == {"demo_marketing", "demo_shop", "system"}
+    assert {row[0] for row in trino_cursor.fetchall()} == {"demo_marketing", "demo_rental", "demo_shop", "system"}
 
 
 def test_trino_revenue_matches_the_generator(trino_cursor, dataset, seeded_end_day):

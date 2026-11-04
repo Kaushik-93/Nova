@@ -203,6 +203,16 @@ def test_ordinary_columns_are_not_flagged(innocent):
     assert kinds(innocent) == set()
 
 
+def test_several_currencies_are_flagged_with_their_values():
+    found = find_gotchas([table(column("currency", "char(3)", top_values=[["USD", 5], ["EUR", 3]]))])
+    assert found[0].kind is GotchaKind.MIXED_CURRENCY
+    assert "USD, EUR" in found[0].detail
+
+
+def test_one_currency_is_not_a_trap():
+    assert kinds(column("currency", "char(3)", top_values=[["USD", 5]])) == set()
+
+
 def test_repeated_findings_collapse_to_one_line_per_table():
     found = find_gotchas([table(column("a_cents", "integer"), column("b_cents", "integer"), column("c_at", "date"),
                                 column("d_at", "date"))])

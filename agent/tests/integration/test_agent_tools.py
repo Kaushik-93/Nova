@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 from langchain_openai import ChatOpenAI
+from pydantic import ValidationError
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.config import get_settings
@@ -177,6 +178,51 @@ def test_finish_refuses_a_chart_that_fails_then_gives_up_after_the_limit(tools, 
     assert any("Broken failed" in warning for warning in runtime.state.warnings)
 
 
+def test_a_hard_coded_date_cannot_become_a_dataset(runtime):
+    with pytest.raises(QueryFailure, match="fixed date"):
+        check_dataset(ITEMS_SQL + " AND o.order_ts >= TIMESTAMP '2025-11-01 00:00:00 UTC'", grain=["order_item_id"],
+                      **harness(runtime))
+
+
+def test_a_snapshot_on_its_own_dataset_needs_no_time_window(tools, runtime):
+    """Regression: refusing this once pushed an agent to hard-code dates into its SQL."""
+    _, (trend,) = build(tools, TREND)
+    fleet = tools["superset_create_dataset"].invoke({"key": "products", "grain": ["product_id"], "sql": """
+        SELECT product_id, category, list_price_cents / 100.0 AS revenue FROM demo_shop.shop.products"""})
+    fleet_id = int(fleet.split("dataset_id=")[1].split(",")[0])
+    snapshot = tools["superset_create_chart"].invoke({"dataset_id": fleet_id, "spec": {
+        "key": "snapshot", "title": "Now", "viz": "big_number_total", "metrics": [{"label": "N", "sql": "COUNT(*)"}]}})
+    snapshot_id = int(snapshot.split("chart_id=")[1].split(",")[0])
+    tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([trend, snapshot_id])})
+    assert tools["finish_dashboard"].invoke({"summary": "s", "definitions": []}) == "Finished."
+
+
+def test_finish_refuses_a_window_that_cuts_off_the_last_day(tools, runtime):
+    """Regression: an agent wrote 2025-11-01 : 2026-10-31, and Superset excludes the end."""
+    cut_short = {**TREND, "periods": None, "fixed_dates": True, "time_range": "2025-11-01 : 2026-10-31"}
+    _, (chart,) = build(tools, cut_short)
+    tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([chart])})
+
+    reply = tools["finish_dashboard"].invoke({"summary": "s", "definitions": []})
+
+    assert reply.startswith("Not finished") and "cut short" in reply
+
+
+def test_the_chart_tool_refuses_fixed_dates_from_the_model(tools):
+    dataset, _ = build(tools, TREND)
+    with pytest.raises(ValidationError, match="fixed dates"):
+        tools["superset_create_chart"].invoke({"dataset_id": dataset, "spec": {**TREND, "periods": None,
+                                                                               "time_range": "2025-11-01 : 2026-10-31"}})
+
+
+def test_a_crowded_layout_wraps(tools, runtime):
+    specs = [{**TREND, "key": f"t{n}", "title": f"Trend {n}"} for n in range(4)]
+    _, charts = build(tools, *specs)
+    tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout(charts, width=3)})
+    rows = json.loads(tools["superset_get_dashboard"].invoke({}))["rows"]
+    assert [[slot["width"] for slot in row] for row in rows] == [[6, 6], [6, 6]]
+
+
 def test_finish_refuses_a_chart_covering_a_different_period(tools, runtime):
     _, (trend, all_time) = build(tools, TREND, {**KPI, "key": "all-time", "title": "All time"})
     tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([trend, all_time])})
@@ -197,6 +243,30 @@ def test_a_row_with_gaps_is_stretched_to_fill_the_grid(tools, runtime):
     _, (trend,) = build(tools, TREND)
     tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([trend], width=4)})
     assert json.loads(tools["superset_get_dashboard"].invoke({}))["rows"][0][0]["width"] == 12
+
+
+def test_finish_refuses_a_filter_that_cannot_reach_a_chart(tools, runtime):
+    with_region, (kpi,) = build(tools, TREND)
+    no_region = tools["superset_create_dataset"].invoke({"key": "other", "grain": ["order_id"], "sql": """
+        SELECT o.order_id, CAST(o.order_ts AS timestamp(3)) AS order_ts, o.tax_cents / 100.0 AS revenue
+        FROM demo_shop.shop.orders o"""})
+    other_id = int(no_region.split("dataset_id=")[1].split(",")[0])
+    other = tools["superset_create_chart"].invoke({"dataset_id": other_id, "spec": {**TREND, "key": "o", "title": "No region"}})
+    other_chart = int(other.split("chart_id=")[1].split(",")[0])
+    tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([kpi, other_chart]),
+                                               "filters": [{"name": "Region", "dataset_id": with_region, "column": "region_name"}]})
+
+    reply = tools["finish_dashboard"].invoke({"summary": "s", "definitions": []})
+
+    assert reply.startswith("Not finished")
+    assert "No region" in reply and "can't reach this chart" in reply and "region_name" in reply
+
+
+def test_a_filter_on_a_column_every_dataset_has_is_accepted(tools, runtime):
+    dataset, (trend,) = build(tools, TREND)
+    tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([trend]),
+                                               "filters": [{"name": "Region", "dataset_id": dataset, "column": "region_name"}]})
+    assert tools["finish_dashboard"].invoke({"summary": "s", "definitions": []}) == "Finished."
 
 
 def test_build_status_shows_what_exists_with_keys(tools, runtime):

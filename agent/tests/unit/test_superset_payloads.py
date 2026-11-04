@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from agent.tools.superset_payloads import (ChartSlot, ChartSpec, Metric, SelectFilter, TimeFilter, TimeGrain, Viz,
                                            build_chart_payload, build_form_data, build_json_metadata,
                                            build_native_filter, build_positions, build_query_context,
-                                           complete_period_range, stable_uuid)
+                                           complete_period_range, stable_uuid, wrap_row)
 
 REVENUE = Metric(label="Revenue", sql="SUM(revenue)")
 ORDERS = Metric(label="Orders", sql="COUNT(*)")
@@ -193,6 +193,17 @@ def test_a_chart_payload_records_its_key():
     assert build_chart_payload(chart(Viz.PIE, key="by-region"), 1, "d")["description"] == "Nova chart key: by-region"
 
 
+@pytest.mark.parametrize("value", ["2025-11-01 : 2026-10-31", "2025-11 : 2026-11", ": 2026-01-01"])
+def test_fixed_dates_are_refused_unless_asked_for(value):
+    with pytest.raises(ValidationError, match="fixed dates"):
+        chart(Viz.LINE, time_range=value)
+    assert chart(Viz.LINE, time_range=value, fixed_dates=True).effective_time_range == value
+
+
+def test_relative_ranges_are_allowed():
+    assert chart(Viz.LINE, time_range="Last quarter").effective_time_range == "Last quarter"
+
+
 def test_periods_need_a_time_column():
     with pytest.raises(ValidationError, match="periods needs"):
         chart(Viz.TABLE, periods=12)
@@ -218,6 +229,18 @@ def test_a_row_cannot_exceed_the_grid():
     too_wide = [[ChartSlot(chart_id=1, title="A", width=8), ChartSlot(chart_id=2, title="B", width=5)]]
     with pytest.raises(ValueError, match="13 columns wide"):
         build_positions("t", too_wide)
+
+
+@pytest.mark.parametrize("viz_types, expected", [
+    (["big_number_total"] * 4, [[0, 1, 2, 3]]),
+    (["big_number_total"] * 5, [[0, 1, 2, 3], [4]]),
+    (["echarts_timeseries_line"] * 4, [[0, 1], [2, 3]]),
+    (["echarts_timeseries_line", "pie", "table"], [[0, 1], [2]]),
+    (["big_number_total", "table"], [[0, 1]]),
+    (["table"], [[0]]),
+])
+def test_crowded_rows_wrap(viz_types, expected):
+    assert wrap_row(viz_types) == expected
 
 
 # --- Filters -----------------------------------------------------------------

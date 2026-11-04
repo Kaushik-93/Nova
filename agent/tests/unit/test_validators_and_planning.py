@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent.dashboard_agent import dashboard_key_for, load_prompt
-from agent.harness.validators import chart_time_window, last_point_warning
+from agent.harness.validators import chart_time_window, last_point_warning, window_end_problem
 from agent.tools.planning import DashboardPlan
 from agent.tools.superset_client import ChartData
 from agent.tools.superset_payloads import ChartSpec, Metric, TimeGrain, Viz, fill_row
@@ -52,6 +52,22 @@ def test_split_trends_are_left_alone():
     # Rows are per series, so the order of values means nothing.
     split = TREND.model_copy(update={"dimensions": ["region"]})
     assert last_point_warning(data(100, 110, 105, 108, 1), split) is None
+
+
+@pytest.mark.parametrize("end, grain", [
+    ("2026-11-01 00:00:00", "P1M"), ("2026-10-01 00:00:00", "P3M"), ("2026-01-01 00:00:00", "P1Y"),
+    ("2026-11-02 00:00:00", "P1W"), ("2026-10-31 00:00:00", "P1D"), (None, "P1M"), ("2026-10-31 00:00:00", None),
+])
+def test_windows_ending_on_a_boundary_pass(end, grain):
+    assert window_end_problem(end, grain) is None
+
+
+@pytest.mark.parametrize("end, grain", [
+    ("2026-10-31 00:00:00", "P1M"), ("2026-11-01 00:00:00", "P3M"), ("2026-07-01 00:00:00", "P1Y"),
+    ("2026-11-03 00:00:00", "P1W"),
+])
+def test_windows_ending_mid_period_are_a_problem(end, grain):
+    assert "cut short" in window_end_problem(end, grain)
 
 
 def test_every_prompt_knows_todays_date():

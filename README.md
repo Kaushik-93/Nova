@@ -3,8 +3,8 @@
 A GenAI BI platform. Connect your data sources, and an AI agent learns them and builds
 Apache Superset dashboards from a sentence or two.
 
-> **Status: in development.** Infrastructure, the Superset client, the SQL harness, profiling
-> and the dashboard agent are complete. The API and UI are still to come.
+> **Status: in development.** You can build dashboards from a prompt and watch the agent work.
+> Connecting new sources from the UI, sign-in and row-level security are still to come.
 
 ## Quickstart
 
@@ -19,12 +19,21 @@ seeds the demo data and waits for everything to be healthy.
 
 | Service | URL | Login |
 |---|---|---|
+| **Nova** | http://localhost:13000 | None yet |
+| API | http://localhost:18000/docs | None yet |
 | Superset | http://localhost:18088 | `admin`, with the password from `.env` |
 | Trino | http://localhost:18080 | Any username |
 
 Run the tests with `make test`, and see every command with `make help`. Tests that call
 the real model cost money, so they're separate: `make test-llm`. Set `MODEL_PROVIDER`,
 `MODEL_NAME` and the matching API key in `.env` first.
+
+To teach the agent a source and build a dashboard from the command line:
+
+```sh
+make skill CATALOG=demo_rental DIALECT=postgres NAME="Rental platform"
+make agent PROMPT="Show revenue by tenant for the last 12 months"
+```
 
 `docker compose up` also works from the repo root once `.env` exists (`make env`).
 

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     model_name: str = "claude-opus-5-5"
 
     superset_url: str
+    superset_public_url: str = "http://localhost:18088"
     superset_admin_user: str
     superset_admin_password: str
     trino_url: str = "http://trino:8080"

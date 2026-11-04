@@ -12,6 +12,20 @@ x-superset-env: &superset-env
   NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
   SCARF_ANALYTICS: "false"
 
+x-agent-env: &agent-env
+  SUPERSET_URL: ${SUPERSET_URL}
+  SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
+  SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+  SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+  NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
+  TRINO_URL: ${TRINO_URL}
+  DATABASE_URL: ${DATABASE_URL}
+  MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
+  MODEL_NAME: ${MODEL_NAME:-claude-opus-5-5}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  NOVA_SKILLS_DIR: /app/skills
+
 x-tools-image: &tools-image
   image: nova-tools:dev
   build:
@@ -230,18 +244,8 @@ services:
     profiles: ["test"]
     command: ["pytest", "-c", "agent/pyproject.toml", "--rootdir=/app", "agent/tests", "-q"]
     environment:
-      SUPERSET_URL: ${SUPERSET_URL}
-      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
-      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
-      NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
-      TRINO_URL: ${TRINO_URL}
-      DATABASE_URL: ${DATABASE_URL}
+      <<: *agent-env
       DEMO_OWNER_PASSWORD: ${DEMO_OWNER_PASSWORD}
-      MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
-      MODEL_NAME: ${MODEL_NAME:-claude-opus-5-5}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      NOVA_SKILLS_DIR: /app/skills
     volumes:
       - ../skills:/app/skills
     depends_on:
@@ -251,6 +255,50 @@ services:
         condition: service_healthy
       trino:
         condition: service_healthy
+
+  # --- Nova ---------------------------------------------------------------------
+  agent:
+    image: nova-agent:dev
+    build:
+      context: ../agent
+    command: ["uvicorn", "agent.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *agent-env
+    volumes:
+      - ../skills:/app/skills
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-18000}:8000"
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      superset:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+    mem_limit: 1536m
+    restart: unless-stopped
+
+  ui:
+    image: nova-ui:dev
+    build:
+      context: ../ui
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${API_HOST_PORT:-18000}
+    ports:
+      - "127.0.0.1:${UI_HOST_PORT:-13000}:3000"
+    environment:
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      agent:
+        condition: service_healthy
+    mem_limit: 384m
+    restart: unless-stopped
 
 volumes:
   metadata-db:

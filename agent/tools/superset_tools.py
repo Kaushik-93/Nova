@@ -15,7 +15,7 @@ from agent.runtime import Runtime
 from agent.tools.renderer import render_dashboard, review_screenshot
 from agent.tools.sql_tools import NoInput, reporting_failures
 from agent.tools.superset_payloads import (CHART_KEY_PREFIX, ChartSlot, ChartSpec, SelectFilter, TimeFilter, fill_row,
-                                           rows_from_positions)
+                                           rows_from_positions, wrap_row)
 
 MAX_ROWS_SHOWN = 15
 DATASET_DATABASE = "Nova Trino"
@@ -110,11 +110,13 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         titles = {c.id: c.slice_name for c in superset.dashboard_charts(state.dashboard.id)} if state.dashboard else {}
         slots = []
         for row in rows:
-            built = []
-            for slot, width in zip(row, fill_row([slot.width for slot in row])):
-                title = titles.get(slot.chart_id) or superset.get_chart(slot.chart_id).slice_name
-                built.append(ChartSlot(chart_id=slot.chart_id, title=title, width=width, height=slot.height))
-            slots.append(built)
+            charts = [superset.get_chart(slot.chart_id) for slot in row]
+            for indexes in wrap_row([chart.viz_type for chart in charts]):
+                chosen = [row[index] for index in indexes]
+                widths = fill_row([slot.width for slot in chosen])
+                slots.append([ChartSlot(chart_id=slot.chart_id, width=width, height=slot.height,
+                                        title=titles.get(slot.chart_id) or charts[index].slice_name)
+                              for index, slot, width in zip(indexes, chosen, widths)])
         return slots
 
     @reporting_failures
