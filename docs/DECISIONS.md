@@ -95,3 +95,24 @@ Rendering a dashboard showed "-85.9% vs previous" and every line collapsing at t
 right edge. Nothing was wrong except that the current month was three days old. The
 chart designer has to end time series at the last complete period, and the verifier
 has to catch a final point that falls off sharply. To be built in Phase 5.
+
+## D-014: All agent SQL runs through Trino
+
+Trino already holds each source's read-only credentials, so the agent only ever names
+a catalog and has no connection string to see or leak. It also means one SQL dialect,
+one place to enforce timeouts, and the same engine Superset uses, so a query that works
+for the agent works in a chart. `to_trino` translates a source's dialect when needed.
+
+## D-015: The guard is an allowlist that fails closed
+
+A denylist can only catch attacks someone thought of. A query passes only if it is one
+SELECT over fully qualified tables in connected catalogs, and anything the parser can't
+fully account for is refused, including queries that would have been fine. The read-only
+users remain the layer underneath.
+
+## D-016: The cost check reads the largest step of the plan
+
+See VERSIONS.md for why the final output is useless. Where Trino has no statistics the
+estimate is skipped rather than refused, and the timeout covers that case. A join pushed
+down to a single source also reports little, and the source's own `statement_timeout`
+bounds it.

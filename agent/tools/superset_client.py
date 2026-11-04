@@ -75,13 +75,15 @@ class SupersetClient:
 
     def __init__(self, base_url: str, username: str, password: str, *, timeout: float = 120.0,
                  max_attempts: int = MAX_ATTEMPTS, retry_wait: float = 0.5,
-                 transport: httpx.BaseTransport | None = None) -> None:
+                 transport: httpx.BaseTransport | None = None,
+                 on_write: Callable[[str, str, int], None] | None = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._credentials = {"username": username, "password": password, "provider": "db", "refresh": False}
         self._http = httpx.Client(base_url=self._base_url, timeout=timeout, transport=transport)
         self._max_attempts = max_attempts
         self._retry_wait = retry_wait
         self._logged_in = False
+        self._on_write = on_write  # called with (method, path, status) for the audit log
 
     def __enter__(self) -> "SupersetClient":
         return self
@@ -159,7 +161,15 @@ class SupersetClient:
 
         if method in SAFE_METHODS:
             return self._retrying(attempt)
-        return attempt()
+        try:
+            response = attempt()
+        except NovaError as error:
+            if self._on_write:
+                self._on_write(method, path, error.status or 0)
+            raise
+        if self._on_write:
+            self._on_write(method, path, response.status_code)
+        return response
 
     def _find_one(self, resource: str, column: str, value: str) -> dict[str, Any] | None:
         query = prison.dumps({"filters": [{"col": column, "opr": "eq", "value": value}], "page_size": 2})

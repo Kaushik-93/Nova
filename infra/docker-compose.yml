@@ -234,7 +234,11 @@ services:
       SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
       NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
+      TRINO_URL: ${TRINO_URL}
+      DATABASE_URL: ${DATABASE_URL}
     depends_on:
+      metadata-db:
+        condition: service_healthy
       superset:
         condition: service_healthy
       trino:

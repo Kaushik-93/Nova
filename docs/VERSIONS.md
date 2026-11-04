@@ -21,13 +21,16 @@ registry, rather than from memory.
 |---|---|---|
 | psycopg2-binary | 2.9.13 | Superset |
 | pymysql | 1.2.3 | Superset, tools |
-| trino | 0.340.0 | Superset, tools |
+| trino | 0.340.0 | Superset, tools, agent |
 | httpx | 0.28.1 | tools |
-| psycopg[binary] | 3.3.8 | tools |
+| psycopg[binary] | 3.3.8 | tools, agent |
 | pytest | 9.2.0 | tools |
 | redis | 8.1.0 | tools |
 
 | prison | 0.2.1 | agent |
+| psycopg-pool | 3.3.3 | agent |
+| python-json-logger | 4.2.0 | agent |
+| sqlglot | 30.29.0 | agent |
 | pydantic | 2.14.2 | agent |
 | pydantic-settings | 2.16.2 | agent |
 | tenacity | 9.2.1 | agent |
@@ -44,7 +47,6 @@ Verified for later phases, and pinned when they start:
 | anthropic | 2.4.0 |
 | langgraph-checkpoint-postgres | 3.2.0 |
 | langgraph-store-postgres | 0.1.0 |
-| sqlglot | 30.29.0 |
 | fastapi | 0.162.0 |
 | uvicorn | 0.54.0 |
 | sse-starlette | 3.6.0 |
@@ -97,8 +99,20 @@ Verified for later phases, and pinned when they start:
   `connection-credential-file`, which keeps the password out of the statement.
 - The file-based access-control plugin refuses `CREATE CATALOG` for every user,
   even with `allow: all`.
+- `TABLE(catalog.system.query(query => '...'))` sends raw SQL straight to the source.
+- `EXPLAIN (TYPE IO)` reports only the final output, so a `count(*)` over a cross join
+  estimates one row. `EXPLAIN (TYPE LOGICAL, FORMAT JSON)` has estimates per step.
+- A bare `COUNT(*)` over a cross join returns almost instantly, because Trino doesn't
+  need to touch each row.
 - A coordinator can't shut down gracefully: `PUT /v1/info/state` fails with `Cannot
   shutdown coordinator`.
+
+**sqlglot 30.29**
+- The `system.query` table function parses as a `Select` over a table whose name is
+  empty, so reading table names alone misses it.
+- `a.b.c.d` parses with `c` inside a `Dot`, and `table.name` reports `d`.
+- `EXPLAIN ANALYZE`, `CALL`, `SHOW` and `PREPARE` fall back to a `Command` node, with a
+  warning rather than an error.
 
 **Deep Agents 0.7.32**
 - Skill names may only contain lowercase alphanumerics and single hyphens, and must

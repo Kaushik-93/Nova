@@ -16,6 +16,7 @@ class ErrorCategory(StrEnum):
     RENDER = "render"
     INVALID_REQUEST = "invalid_request"
     NOT_FOUND = "not_found"
+    BUDGET = "budget"
 
 
 class NovaError(Exception):
@@ -56,3 +57,30 @@ class InvalidRequest(NovaError):
 
 class QueryFailure(NovaError):
     category = ErrorCategory.SQL
+
+
+class SqlRejected(NovaError):
+    """The guardrails refused to run this SQL. It was never sent anywhere."""
+
+    category = ErrorCategory.SQL
+
+
+class QueryTooExpensive(NovaError):
+    """EXPLAIN estimates this query is over budget. Narrow it and try again."""
+
+    category = ErrorCategory.SQL
+
+
+class QueryTimedOut(NovaError):
+    category = ErrorCategory.SQL
+
+
+class BudgetExceeded(NovaError):
+    """A run limit was reached. The run should stop and return what it has."""
+
+    category = ErrorCategory.BUDGET
+
+    def __init__(self, resource: str, limit: float) -> None:
+        super().__init__(f"run budget exhausted: {resource} (limit {limit:g})")
+        self.resource = resource
+        self.limit = limit
