@@ -4,11 +4,13 @@ is replaced by a stub for these tests, and the real thing is tested in tests/llm
 import json
 import threading
 import uuid
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from agent.api.main import create_app
+from agent.api.runs import RunManager
 from agent.config import get_settings
 from agent.dashboard_agent import RunResult, RunStatus
 
@@ -34,8 +36,12 @@ class FakeRun:
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(create_app()) as client:
+    # Starting a server marks runs it finds in progress as abandoned. Here that would catch real
+    # runs in the shared database, so these tests skip it, and remove their own runs afterwards.
+    with mock.patch.object(RunManager, "mark_abandoned"), TestClient(create_app()) as client:
         yield client
+        with client.app.state.services.pool.connection() as conn:
+            conn.execute("DELETE FROM runs WHERE prompt = 'p' OR prompt = 'Show sales'")
 
 
 @pytest.fixture
