@@ -223,6 +223,23 @@ services:
       trino:
         condition: service_healthy
 
+  agent-tests:
+    image: nova-agent:dev
+    build:
+      context: ../agent
+    profiles: ["test"]
+    command: ["pytest", "-c", "agent/pyproject.toml", "--rootdir=/app", "agent/tests", "-q"]
+    environment:
+      SUPERSET_URL: ${SUPERSET_URL}
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+      NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
+    depends_on:
+      superset:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+
 volumes:
   metadata-db:
   demo-postgres:

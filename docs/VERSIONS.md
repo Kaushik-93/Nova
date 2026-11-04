@@ -27,6 +27,11 @@ registry, rather than from memory.
 | pytest | 9.2.0 | tools |
 | redis | 8.1.0 | tools |
 
+| prison | 0.2.1 | agent |
+| pydantic | 2.14.2 | agent |
+| pydantic-settings | 2.16.2 | agent |
+| tenacity | 9.2.1 | agent |
+
 Verified for later phases, and pinned when they start:
 
 | Package | Version |
@@ -43,7 +48,6 @@ Verified for later phases, and pinned when they start:
 | fastapi | 0.162.0 |
 | uvicorn | 0.54.0 |
 | sse-starlette | 3.6.0 |
-| pydantic | 2.14.2 |
 | cryptography | 50.0.2 |
 | langsmith | 0.14.17 |
 | playwright | 1.64.1 |
@@ -74,6 +78,15 @@ Verified for later phases, and pinned when they start:
   `allowed_domains`.
 - Guest tokens come from `POST /api/v1/security/guest_token/` and need
   `can_grant_guest_token`.
+- `POST` on charts, datasets and dashboards accepts a client-supplied `uuid`, and
+  charts and datasets can be searched by it. Nova's idempotency is built on this.
+- `PUT /api/v1/dashboard/{id}` with `positions` inside `json_metadata` rebuilds the
+  dashboard's chart list from the layout, and fills in each chart's UUID. Writing
+  `position_json` alone doesn't link charts.
+- A chart's data endpoint (`GET /api/v1/chart/{id}/data/`) only works if the chart
+  has a saved `query_context`, so Nova always stores one.
+- Creating a virtual dataset runs its SQL to read the columns. Bad SQL returns a
+  bare 500, and nothing is saved.
 - `POST /api/v1/sqllab/execute/` rejects a `json` field. An async response carries
   the numeric id in `query.queryId`; `query.id` is the client id.
 

@@ -34,3 +34,4 @@ seed: env ## Rebuild the demo data from scratch
 
 test: up ## Run all tests against the running stack
 	$(COMPOSE) --profile test run --rm --build tests
+	$(COMPOSE) --profile test run --rm --build agent-tests

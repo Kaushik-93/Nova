@@ -1,0 +1,13 @@
+[project]
+name = "nova-agent"
+version = "0.1.0"
+description = "Nova's agent, tools and harness"
+requires-python = ">=3.13"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.pytest.ini_options]
+testpaths = ["agent/tests"]
+markers = ["integration: needs the running stack"]

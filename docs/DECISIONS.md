@@ -70,3 +70,28 @@ needs only Docker, make and openssl, with no local Python.
 
 It's pure Python, so the derived image needs no compiler or client libraries.
 Connection URIs use `mysql+pymysql://`.
+
+## D-010: Identify Superset objects by deterministic UUID
+
+The prompt suggested tags or a naming convention. Superset 6.1.0 accepts a
+client-supplied `uuid`, so each chart and dataset gets a UUIDv5 of its key, and each
+dashboard a stable slug. `ensure_*` looks the object up first. A retry after a
+timed-out POST that actually succeeded therefore finds that object, without touching
+titles the user might edit.
+
+## D-011: A plain 500 from Superset is not retried
+
+Only 429, 502, 503 and 504 are transient. Superset's 500s are deterministic (bad
+dataset SQL returns one), so retrying only wastes time and hides the cause.
+
+## D-012: A synchronous Superset client
+
+Tools run in LangGraph's thread pool and FastAPI runs sync endpoints in its own, so a
+sync `httpx.Client` works everywhere, with no async plumbing to carry through.
+
+## D-013: Charts must not treat a partial period as a real one
+
+Rendering a dashboard showed "-85.9% vs previous" and every line collapsing at the
+right edge. Nothing was wrong except that the current month was three days old. The
+chart designer has to end time series at the last complete period, and the verifier
+has to catch a final point that falls off sharply. To be built in Phase 5.
