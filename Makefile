@@ -1,7 +1,7 @@
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help env up down reset logs ps seed test
+.PHONY: help env up down reset logs ps seed test lock
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-8s %s\n", $$1, $$2}'
@@ -35,3 +35,6 @@ seed: env ## Rebuild the demo data from scratch
 test: up ## Run all tests against the running stack
 	$(COMPOSE) --profile test run --rm --build tests
 	$(COMPOSE) --profile test run --rm --build agent-tests
+
+lock: ## Regenerate agent/requirements.lock (needs uv)
+	uv pip compile agent/requirements.txt --python-version 3.13 --python-platform linux -q -o agent/requirements.lock

@@ -27,19 +27,23 @@ registry, rather than from memory.
 | pytest | 9.2.0 | tools |
 | redis | 8.1.0 | tools |
 
+| deepagents | 0.7.32 | agent |
 | prison | 0.2.1 | agent |
 | psycopg-pool | 3.3.3 | agent |
 | python-json-logger | 4.2.0 | agent |
 | sqlglot | 30.29.0 | agent |
 | pydantic | 2.14.2 | agent |
 | pydantic-settings | 2.16.2 | agent |
-| tenacity | 9.2.1 | agent |
+| pyyaml | 6.0.3 | agent |
+| tenacity | 9.1.4 | agent. `deepagents` pulls in `google-genai`, which needs `<9.2.0`. |
+
+`agent/requirements.txt` holds the direct pins, and `agent/requirements.lock` the full
+resolved tree that the image installs. Run `make lock` after changing the first.
 
 Verified for later phases, and pinned when they start:
 
 | Package | Version |
 |---|---|
-| deepagents | 0.7.32 |
 | langchain | 1.4.8 |
 | langchain-core | 1.7.4 |
 | langgraph | 1.2.19 |
@@ -113,6 +117,14 @@ Verified for later phases, and pinned when they start:
 - `a.b.c.d` parses with `c` inside a `Dot`, and `table.name` reports `d`.
 - `EXPLAIN ANALYZE`, `CALL`, `SHOW` and `PREPARE` fall back to a `Command` node, with a
   warning rather than an error.
+
+**Trino sampling**
+- `LIMIT n` takes the oldest rows, so on the demo orders it reports data ending in
+  January 2025. `TABLESAMPLE BERNOULLI` is fair, but reads the whole table.
+- `approx_distinct` is off by about 2%, which is enough to make a unique column look
+  like it has duplicates.
+- `information_schema` has no constraints or comments for JDBC catalogs. They have to
+  be read from the source, through `system.query`.
 
 **Deep Agents 0.7.32**
 - Skill names may only contain lowercase alphanumerics and single hyphens, and must

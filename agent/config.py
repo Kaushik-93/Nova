@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     trino_url: str = "http://trino:8080"
     database_url: str = ""
 
+    nova_skills_dir: str = "skills"
+
     nova_max_steps: int = 150
     nova_max_tokens: int = 2_000_000
     nova_max_wall_seconds: float = 900

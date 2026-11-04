@@ -15,3 +15,26 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS audit_log_run_idx ON audit_log (run_id, id);
+
+CREATE TABLE IF NOT EXISTS sources (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug          text NOT NULL UNIQUE,
+    display_name  text NOT NULL,
+    trino_catalog text NOT NULL UNIQUE,
+    dialect       text NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS skills (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug               text NOT NULL UNIQUE,
+    source_id          uuid REFERENCES sources ON DELETE SET NULL,
+    kind               text NOT NULL DEFAULT 'source' CHECK (kind IN ('source', 'join')),
+    version            integer NOT NULL,
+    status             text NOT NULL CHECK (status IN ('draft', 'reviewed')),
+    schema_fingerprint text NOT NULL,
+    path               text NOT NULL,
+    generated_at       timestamptz NOT NULL,
+    reviewed_by        text,
+    updated_at         timestamptz NOT NULL DEFAULT now()
+);

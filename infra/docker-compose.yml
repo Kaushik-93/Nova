@@ -236,6 +236,7 @@ services:
       NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
       TRINO_URL: ${TRINO_URL}
       DATABASE_URL: ${DATABASE_URL}
+      DEMO_OWNER_PASSWORD: ${DEMO_OWNER_PASSWORD}
     depends_on:
       metadata-db:
         condition: service_healthy

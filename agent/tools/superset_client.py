@@ -96,7 +96,7 @@ class SupersetClient:
 
     def _retrying(self, operation: Callable[[], T]) -> T:
         for attempt in Retrying(retry=retry_if_exception(_is_retryable), stop=stop_after_attempt(self._max_attempts),
-                                wait=wait_exponential_jitter(multiplier=self._retry_wait, max=8), reraise=True):
+                                wait=wait_exponential_jitter(initial=self._retry_wait, max=8), reraise=True):
             with attempt:
                 return operation()
         raise AssertionError("unreachable")

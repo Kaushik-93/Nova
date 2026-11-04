@@ -121,6 +121,31 @@ class SqlExecutor:
                      detail={"estimate": estimate.model_dump(), "truncated": result.truncated})
         return result
 
+    def run_internal(self, sql: str, *, context: RunContext, purpose: str) -> list[list[Any]]:
+        """Run a fixed, server-written statement that the guard would refuse, such as
+        reading declared keys through Trino's passthrough.
+
+        This skips the guard, so it must never receive text that came from the model
+        or from a data source, and no agent tool may call it. It is still audited.
+        """
+        started = time.monotonic()
+        connection = self._connect()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(sql)
+                rows = [list(row) for row in cursor.fetchall()]
+            except trino.exceptions.TrinoQueryError as error:
+                failure = self._translate(error)
+                self._audit.record(context, AuditKind.SQL, AuditStatus.FAILED, target=purpose, statement=sql,
+                                   detail={"internal": True, "reason": failure.message})
+                raise failure from error
+        finally:
+            connection.close()
+        self._audit.record(context, AuditKind.SQL, AuditStatus.OK, target=purpose, statement=sql, rows=len(rows),
+                           elapsed_ms=int((time.monotonic() - started) * 1000), detail={"internal": True})
+        return rows
+
     def _record(self, context: RunContext, status: AuditStatus, statement: str, guarded: GuardedQuery | None,
                 started: float, *, rows: int | None = None, detail: dict[str, Any]) -> None:
         self._audit.record(context, AuditKind.SQL, status, target=",".join(guarded.tables) if guarded else "",

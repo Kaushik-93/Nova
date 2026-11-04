@@ -116,3 +116,34 @@ See VERSIONS.md for why the final output is useless. Where Trino has no statisti
 estimate is skipped rather than refused, and the timeout covers that case. A join pushed
 down to a single source also reports little, and the source's own `statement_timeout`
 bounds it.
+
+## D-017: Nova's skill fields live under `metadata:`
+
+The prompt lists `source_id`, `schema_fingerprint` and others as frontmatter fields, and
+also says to follow the Deep Agents convention. Deep Agents ignores unknown top-level
+keys and keeps `metadata` as strings, so that's where they go.
+
+## D-018: Join skills will be named `join-<a>-<b>`
+
+The prompt's `/skills/_joins/<a>__<b>/` breaks the skill naming rules, which allow only
+lowercase letters, digits and single hyphens, and require the name to match its
+directory. They'll live at `/skills/_joins/join-<a>-<b>/`, and `_joins` is passed as its
+own skills source because Deep Agents only looks one level deep. To be built in Phase 8.
+
+## D-019: The profiler measures; the model interprets
+
+Everything in `SourceProfile` is measured, with no LLM involved, so the subagent's
+conclusions rest on real numbers, and a skill can be audited against them. Declared keys
+use Trino's passthrough through `SqlExecutor.run_internal`, which skips the guard. That
+is only safe because its text is fixed and server-written, so no agent tool may call it.
+
+## D-020: Personal data never becomes a top value
+
+Columns named like emails, names and phone numbers never have their values stored in a
+skill, even at low cardinality. Skills are shown to the model and shared across an org.
+
+## D-021: Install from a lockfile, with uv
+
+`pip` searched for over seven minutes on an unsatisfiable pin rather than failing, where
+`uv` reported the conflict in half a second. The image now installs a generated
+`requirements.lock`, which also makes builds reproducible.
