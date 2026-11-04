@@ -232,6 +232,13 @@ def test_offset_survives():
     assert "OFFSET 10" in guard(f"SELECT * FROM {ORDERS} OFFSET 10 LIMIT 5", POLICY).sql
 
 
+def test_dataset_sql_is_validated_but_not_limited():
+    guarded = guard(f"SELECT * FROM {ORDERS}", POLICY, add_limit=False)
+    assert "LIMIT" not in guarded.sql
+    with pytest.raises(SqlRejected):
+        guard("SELECT * FROM system.runtime.queries", POLICY, add_limit=False)
+
+
 # --- Comments ----------------------------------------------------------------
 
 @pytest.mark.parametrize("sql", [

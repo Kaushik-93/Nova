@@ -33,6 +33,7 @@ registry, rather than from memory.
 | langchain-openai | 1.7.3 | agent |
 | langgraph | 1.2.19 | agent |
 | langgraph-checkpoint-postgres | 3.2.0 | agent |
+| playwright | 1.64.1 | agent |
 | prison | 0.2.1 | agent |
 | psycopg-pool | 3.3.3 | agent |
 | python-json-logger | 4.2.0 | agent |
@@ -54,7 +55,6 @@ Verified for later phases, and pinned when they start:
 | sse-starlette | 3.6.0 |
 | cryptography | 50.0.2 |
 | langsmith | 0.14.17 |
-| playwright | 1.64.1 |
 
 ## JavaScript (verified, pinned in Phase 7)
 
@@ -87,6 +87,10 @@ Verified for later phases, and pinned when they start:
 - `PUT /api/v1/dashboard/{id}` with `positions` inside `json_metadata` rebuilds the
   dashboard's chart list from the layout, and fills in each chart's UUID. Writing
   `position_json` alone doesn't link charts.
+- Chart data reports the window it applied, in `from_dttm` and `to_dttm` as epoch milliseconds.
+- Line chart data can come back newest first.
+- `DATETRUNC(DATETIME('today'), month)` and `DATEADD(..., -12, month)` work in time ranges, for
+  every grain.
 - A chart's data endpoint (`GET /api/v1/chart/{id}/data/`) only works if the chart
   has a saved `query_context`, so Nova always stores one.
 - Creating a virtual dataset runs its SQL to read the columns. Bad SQL returns a
@@ -133,6 +137,13 @@ Verified for later phases, and pinned when they start:
 - `skills=` takes directories of skill directories and looks one level deep, so
   `/skills/_joins/` must be passed as a separate source.
 - Descriptions over 1,024 characters are truncated.
+
+**LangGraph 1.2 and Deep Agents checkpoints**
+- Subagents checkpoint under their own namespace, so a raw `saver.list()` returns their state
+  mixed with the main thread's.
+- The root checkpoint doesn't hold `messages` in `channel_values`. Read a conversation with
+  `agent.get_state(config)`.
+- Subagents get the same `files` state as the main agent, but not its `messages` or `todos`.
 
 **langchain-openai 1.7.3 with `gpt-6-luna`** (tested live)
 - Needs the Responses API (`use_responses_api=True`).

@@ -213,6 +213,16 @@ class SkillStore:
                  "status": front.status.value, "fingerprint": front.schema_fingerprint, "path": str(directory),
                  "generated_at": front.generated_at, "reviewed_by": front.reviewed_by})
 
+    def propose_metric(self, slug: str, key: str, metric: Metric, *, reason: str) -> None:
+        """Record a suggested change for a person to accept or reject. Nothing the agent
+        relies on changes until someone does."""
+        layer = self.read_semantic_layer(slug)
+        layer.proposed[key] = metric
+        directory = self.path(slug)
+        (directory / "metrics.yaml").write_text(yaml.safe_dump(layer.model_dump(mode="json"), sort_keys=False))
+        with (directory / "CHANGELOG.md").open("a") as changelog:
+            changelog.write(f"## Proposed change to {key}\n\n{reason.rstrip()}\n\n")
+
     def tracked(self, slug: str) -> dict[str, Any] | None:
         with self._pool.connection() as conn:
             cursor = conn.execute("SELECT slug, version, status, schema_fingerprint, reviewed_by FROM skills "

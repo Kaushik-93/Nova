@@ -64,9 +64,11 @@ class GuardedQuery:
     limit: int
 
 
-def guard(sql: str, policy: SqlPolicy, *, dialect: str = TRINO) -> GuardedQuery:
+def guard(sql: str, policy: SqlPolicy, *, dialect: str = TRINO, add_limit: bool = True) -> GuardedQuery:
     """Validate `sql` and return a safe, LIMITed, comment-free version of it.
 
+    `add_limit=False` is for SQL stored as a virtual dataset: Superset adds the limit
+    itself when charts query it, and a LIMIT in the dataset would silently cut totals.
     Raises SqlRejected, with a reason the agent can act on.
     """
     if len(sql) > MAX_SQL_LENGTH:
@@ -79,7 +81,7 @@ def guard(sql: str, policy: SqlPolicy, *, dialect: str = TRINO) -> GuardedQuery:
     _reject_forbidden_nodes(tree)
     _reject_forbidden_functions(tree)
     tables = _check_tables(tree, policy)
-    limit = _apply_limit(tree, policy.max_rows)
+    limit = _apply_limit(tree, policy.max_rows) if add_limit else 0
     return GuardedQuery(sql=tree.sql(dialect=TRINO, comments=False), tables=tables, limit=limit)
 
 

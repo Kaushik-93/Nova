@@ -49,6 +49,34 @@ class TimeGrain(StrEnum):
 
 TIME_SERIES = {Viz.LINE, Viz.AREA, Viz.BIG_NUMBER_TREND}
 SINGLE_METRIC = {Viz.BIG_NUMBER, Viz.BIG_NUMBER_TREND, Viz.PIE}
+GRAIN_UNITS = {TimeGrain.DAY: "day", TimeGrain.WEEK: "week", TimeGrain.MONTH: "month", TimeGrain.QUARTER: "quarter",
+               TimeGrain.YEAR: "year"}
+# Superset's smart format labels January as "2026" between December and February.
+GRAIN_FORMATS = {TimeGrain.DAY: "%b %d", TimeGrain.WEEK: "%b %d", TimeGrain.MONTH: "%b %Y",
+                 TimeGrain.QUARTER: "%Y Q%q", TimeGrain.YEAR: "%Y"}
+NO_FILTER = "No filter"
+# Superset has nowhere else to keep a chart's stable key, and a follow-up request needs it
+# to update the chart rather than make another one.
+CHART_KEY_PREFIX = "Nova chart key: "
+
+
+def complete_period_range(grain: TimeGrain, periods: int | None = None) -> str:
+    """A Superset time range ending at the start of the current period, so the period
+    still in progress is left out. A trend that includes a month three days old
+    appears to collapse, and a KPI compared with it reports a huge fall that never
+    happened."""
+    unit = GRAIN_UNITS[grain]
+    end = f"DATETRUNC(DATETIME('today'), {unit})"
+    if periods is None:
+        return f"DATEADD({end}, -100, year) : {end}"
+    return f"DATEADD({end}, -{periods}, {unit}) : {end}"
+
+
+def partial_period_range(grain: TimeGrain, periods: int) -> str:
+    """The last `periods` periods, counting the one still in progress."""
+    unit = GRAIN_UNITS[grain]
+    current = f"DATETRUNC(DATETIME('today'), {unit})"
+    return f"DATEADD({current}, -{periods - 1}, {unit}) : DATEADD({current}, 1, {unit})"
 
 
 class Metric(BaseModel):
@@ -66,7 +94,10 @@ class ChartSpec(BaseModel):
     dimensions: list[str] = Field(default_factory=list)
     time_column: str | None = None
     time_grain: TimeGrain | None = None
-    time_range: str = "No filter"
+    periods: int | None = Field(default=None, ge=1, le=240,
+                                description="How many complete periods of time_grain to show, such as 12 months")
+    time_range: str = Field(default=NO_FILTER, description="An explicit Superset range. Prefer `periods`.")
+    include_partial_period: bool = Field(default=False, description="Keep the period still in progress")
     row_limit: int = Field(default=1000, ge=1, le=50000)
     descending: bool = True
     y_axis_format: str = "SMART_NUMBER"
@@ -81,7 +112,25 @@ class ChartSpec(BaseModel):
             raise ValueError("pie takes exactly one dimension")
         if self.viz is Viz.BAR and not (self.dimensions or self.time_column):
             raise ValueError("bar needs a dimension or a time column for its x axis")
+        if self.periods and not (self.time_column and self.time_grain):
+            raise ValueError("periods needs time_column and time_grain")
         return self
+
+    @property
+    def is_trend(self) -> bool:
+        return self.viz in TIME_SERIES or (self.viz is Viz.BAR and self.time_column is not None)
+
+    @property
+    def effective_time_range(self) -> str:
+        """Trends end at the last complete period unless told otherwise. This is applied
+        here rather than left to the prompt, so that no chart can get it wrong."""
+        if self.time_range != NO_FILTER or not (self.time_grain and self.time_column):
+            return self.time_range
+        if self.include_partial_period:
+            return partial_period_range(self.time_grain, self.periods) if self.periods else NO_FILTER
+        if self.periods or self.is_trend:
+            return complete_period_range(self.time_grain, self.periods)
+        return self.time_range
 
 
 def _adhoc_metric(metric: Metric) -> dict[str, Any]:
@@ -104,7 +153,7 @@ def _adhoc_filters(spec: ChartSpec) -> list[dict[str, Any]]:
         "clause": "WHERE",
         "subject": spec.time_column,
         "operator": "TEMPORAL_RANGE",
-        "comparator": spec.time_range,
+        "comparator": spec.effective_time_range,
         "expressionType": "SIMPLE",
     }]
 
@@ -142,7 +191,8 @@ def build_form_data(spec: ChartSpec, dataset_id: int) -> dict[str, Any]:
         case Viz.LINE | Viz.AREA | Viz.BAR:
             form |= {"metrics": metrics, "x_axis": x_axis, "groupby": groupby, "y_axis_format": spec.y_axis_format,
                      "x_axis_sort_asc": True, "show_legend": len(metrics) > 1 or bool(groupby), "rich_tooltip": True,
-                     "tooltipTimeFormat": "smart_date", "x_axis_time_format": "smart_date"}
+                     "tooltipTimeFormat": GRAIN_FORMATS.get(spec.time_grain, "smart_date"),
+                     "x_axis_time_format": GRAIN_FORMATS.get(spec.time_grain, "smart_date")}
             if spec.viz is Viz.BAR:
                 form |= {"orientation": "vertical"}
                 if not spec.time_column:
@@ -196,7 +246,7 @@ def build_query_context(spec: ChartSpec, dataset_id: int) -> dict[str, Any]:
         "custom_form_data": {},
     }
     if spec.time_column:
-        query["filters"] = [{"col": spec.time_column, "op": "TEMPORAL_RANGE", "val": spec.time_range}]
+        query["filters"] = [{"col": spec.time_column, "op": "TEMPORAL_RANGE", "val": spec.effective_time_range}]
     if spec.time_grain:
         query["extras"]["time_grain_sqla"] = spec.time_grain.value
     if spec.viz in {Viz.PIE, Viz.TABLE} or (spec.viz is Viz.BAR and not spec.time_column):
@@ -215,6 +265,7 @@ def build_query_context(spec: ChartSpec, dataset_id: int) -> dict[str, Any]:
 def build_chart_payload(spec: ChartSpec, dataset_id: int, dashboard_key: str) -> dict[str, Any]:
     return {
         "slice_name": spec.title,
+        "description": f"{CHART_KEY_PREFIX}{spec.key}",
         "viz_type": spec.viz.value,
         "datasource_id": dataset_id,
         "datasource_type": "table",
@@ -242,7 +293,7 @@ class SelectFilter(BaseModel):
 
 class TimeFilter(BaseModel):
     name: str = "Time range"
-    default: str = "No filter"
+    default: str | None = Field(default=None, description="None leaves each chart's own range in place")
 
 
 def build_positions(title: str, rows: list[list[ChartSlot]]) -> dict[str, Any]:
@@ -295,13 +346,16 @@ def build_native_filter(native: SelectFilter | TimeFilter) -> dict[str, Any]:
         "scope": {"rootPath": ["ROOT_ID"], "excluded": []},
     }
     if isinstance(native, TimeFilter):
+        # With no default the mask stays empty. Setting "No filter" here would replace
+        # every chart's range, and bring back the partial period.
+        chosen = native.default
         return base | {
             "filterType": "filter_time",
             "targets": [{}],
             "controlValues": {"enableEmptyFilter": False},
             "defaultDataMask": {
-                "extraFormData": {"time_range": native.default},
-                "filterState": {"value": native.default},
+                "extraFormData": {"time_range": chosen} if chosen else {},
+                "filterState": {"value": chosen} if chosen else {},
                 "ownState": {},
             },
         }
@@ -314,12 +368,13 @@ def build_native_filter(native: SelectFilter | TimeFilter) -> dict[str, Any]:
     }
 
 
-def build_json_metadata(positions: dict[str, Any], filters: list[SelectFilter | TimeFilter]) -> dict[str, Any]:
-    # `positions` is deliberate: Superset rebuilds the dashboard's chart list from
-    # it on update, which is what removes a chart dropped from the layout.
+def build_json_metadata(positions: dict[str, Any], filters: list[dict[str, Any]]) -> dict[str, Any]:
+    """`filters` are built native filters. `positions` is deliberate: Superset rebuilds
+    the dashboard's chart list from it on update, which is what removes a chart dropped
+    from the layout."""
     return {
         "positions": positions,
-        "native_filter_configuration": [build_native_filter(f) for f in filters],
+        "native_filter_configuration": filters,
         "cross_filters_enabled": True,
         "color_scheme": "supersetColors",
         "filter_bar_orientation": "VERTICAL",
@@ -328,3 +383,32 @@ def build_json_metadata(positions: dict[str, Any], filters: list[SelectFilter | 
         "expanded_slices": {},
         "stagger_refresh": False,
     }
+
+
+def fill_row(widths: list[int]) -> list[int]:
+    """Stretch a row to the full grid. Charts keep their proportions, and the largest
+    take any leftover columns, so a row never ends in a gap."""
+    total = sum(widths)
+    scaled = [max(1, width * GRID_COLUMNS // total) for width in widths]
+    order = sorted(range(len(widths)), key=lambda i: widths[i], reverse=True)
+    for index in order * GRID_COLUMNS:
+        if sum(scaled) >= GRID_COLUMNS:
+            break
+        scaled[index] += 1
+    return scaled
+
+
+def rows_from_positions(positions: dict[str, Any]) -> list[list[ChartSlot]]:
+    """Read a layout back, so that a follow-up request can change it rather than start
+    over."""
+    rows: list[list[ChartSlot]] = []
+    for row_id in positions.get("GRID_ID", {}).get("children", []):
+        slots = []
+        for child_id in positions.get(row_id, {}).get("children", []):
+            meta = positions.get(child_id, {}).get("meta", {})
+            if meta.get("chartId"):
+                slots.append(ChartSlot(chart_id=meta["chartId"], title=meta.get("sliceName", ""),
+                                       width=meta.get("width", 4), height=meta.get("height", DEFAULT_ROW_HEIGHT)))
+        if slots:
+            rows.append(slots)
+    return rows

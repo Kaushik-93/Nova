@@ -3,8 +3,8 @@
 A GenAI BI platform. Connect your data sources, and an AI agent learns them and builds
 Apache Superset dashboards from a sentence or two.
 
-> **Status: in development.** Infrastructure, the Superset client, the SQL harness and
-> profiling are complete. The dashboard agent, API and UI are still to come.
+> **Status: in development.** Infrastructure, the Superset client, the SQL harness, profiling
+> and the dashboard agent are complete. The API and UI are still to come.
 
 ## Quickstart
 

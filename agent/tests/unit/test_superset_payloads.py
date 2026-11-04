@@ -5,7 +5,8 @@ from pydantic import ValidationError
 
 from agent.tools.superset_payloads import (ChartSlot, ChartSpec, Metric, SelectFilter, TimeFilter, TimeGrain, Viz,
                                            build_chart_payload, build_form_data, build_json_metadata,
-                                           build_native_filter, build_positions, build_query_context, stable_uuid)
+                                           build_native_filter, build_positions, build_query_context,
+                                           complete_period_range, stable_uuid)
 
 REVENUE = Metric(label="Revenue", sql="SUM(revenue)")
 ORDERS = Metric(label="Orders", sql="COUNT(*)")
@@ -58,6 +59,12 @@ def test_time_series_put_time_on_the_x_axis_at_the_chosen_grain():
     assert form["time_grain_sqla"] == "P3M"
     assert column["columnType"] == "BASE_AXIS"
     assert column["timeGrain"] == "P3M"
+
+
+@pytest.mark.parametrize("grain, expected", [(TimeGrain.MONTH, "%b %Y"), (TimeGrain.QUARTER, "%Y Q%q"),
+                                             (TimeGrain.YEAR, "%Y"), (TimeGrain.DAY, "%b %d")])
+def test_time_axes_label_every_point_unambiguously(grain, expected):
+    assert build_form_data(chart(Viz.LINE, time_grain=grain), 1)["x_axis_time_format"] == expected
 
 
 def test_time_filter_is_applied_in_both_form_data_and_query():
@@ -136,6 +143,61 @@ def test_payloads_are_deterministic():
     assert build_chart_payload(chart(Viz.LINE), 1, "d") == build_chart_payload(chart(Viz.LINE), 1, "d")
 
 
+# --- Complete periods --------------------------------------------------------
+
+def test_a_range_ends_at_the_start_of_the_current_period():
+    assert complete_period_range(TimeGrain.MONTH, 12) == (
+        "DATEADD(DATETRUNC(DATETIME('today'), month), -12, month) : DATETRUNC(DATETIME('today'), month)")
+
+
+@pytest.mark.parametrize("viz", [Viz.LINE, Viz.AREA, Viz.BIG_NUMBER_TREND])
+def test_trends_leave_out_the_period_in_progress_by_default(viz):
+    assert chart(viz).effective_time_range.endswith(": DATETRUNC(DATETIME('today'), month)")
+
+
+def test_bars_over_time_are_trends_too():
+    spec = chart(Viz.BAR, dimensions=[], time_column="order_date", time_grain=TimeGrain.WEEK)
+    assert spec.effective_time_range.endswith(": DATETRUNC(DATETIME('today'), week)")
+
+
+def test_periods_bound_the_start():
+    assert "-6, month" in chart(Viz.LINE, periods=6).effective_time_range
+
+
+def test_a_kpi_with_periods_matches_its_trend():
+    kpi = chart(Viz.BIG_NUMBER, time_column="order_date", time_grain=TimeGrain.MONTH, periods=12)
+    assert kpi.effective_time_range == chart(Viz.LINE, periods=12).effective_time_range
+
+
+def test_a_kpi_without_periods_covers_all_time():
+    assert chart(Viz.BIG_NUMBER, time_column="order_date").effective_time_range == "No filter"
+
+
+def test_an_explicit_range_wins():
+    assert chart(Viz.LINE, time_range="Last week").effective_time_range == "Last week"
+
+
+def test_the_partial_period_can_be_asked_for():
+    assert chart(Viz.LINE, include_partial_period=True).effective_time_range == "No filter"
+
+
+def test_asking_for_the_partial_period_still_honours_periods():
+    # Regression: this once dropped `periods`, so "12 months" showed all of history.
+    spec = chart(Viz.LINE, periods=12, include_partial_period=True)
+    assert spec.effective_time_range == (
+        "DATEADD(DATETRUNC(DATETIME('today'), month), -11, month) : "
+        "DATEADD(DATETRUNC(DATETIME('today'), month), 1, month)")
+
+
+def test_a_chart_payload_records_its_key():
+    assert build_chart_payload(chart(Viz.PIE, key="by-region"), 1, "d")["description"] == "Nova chart key: by-region"
+
+
+def test_periods_need_a_time_column():
+    with pytest.raises(ValidationError, match="periods needs"):
+        chart(Viz.TABLE, periods=12)
+
+
 # --- Layout ------------------------------------------------------------------
 
 def test_positions_form_a_tree_with_every_chart_on_a_row():
@@ -182,8 +244,13 @@ def test_filter_ids_are_stable_so_rebuilds_keep_user_selections():
     assert first != build_native_filter(TimeFilter(name="Other"))["id"]
 
 
+def test_a_time_filter_with_no_default_leaves_chart_ranges_alone():
+    native = build_native_filter(TimeFilter())
+    assert native["defaultDataMask"]["extraFormData"] == {}
+
+
 def test_json_metadata_carries_positions_so_superset_relinks_charts():
     positions = build_positions("t", [[ChartSlot(chart_id=1, title="A", width=12)]])
-    metadata = build_json_metadata(positions, [TimeFilter()])
+    metadata = build_json_metadata(positions, [build_native_filter(TimeFilter())])
     assert metadata["positions"] == positions
     assert len(metadata["native_filter_configuration"]) == 1

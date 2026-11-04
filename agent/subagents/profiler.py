@@ -24,7 +24,6 @@ from deepagents import create_deep_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
-from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
 from agent.config import Settings, get_settings
@@ -35,11 +34,12 @@ from agent.harness.errors import ErrorCategory, NovaError, QueryFailure
 from agent.harness.executor import SqlExecutor
 from agent.harness.guardrails import SqlPolicy
 from agent.harness.logs import configure_logging
-from agent.harness.middleware import BudgetMiddleware
+from agent.harness.middleware import RunMiddleware
 from agent.harness.untrusted import wrap_untrusted
 from agent.llm import build_model
 from agent.tools.profiler import Profiler, SourceProfile, TableProfile
 from agent.tools.skill_store import Metric, SemanticLayer, SkillFrontmatter, SkillStore, skill_slug
+from agent.tools.sources import register_source
 from agent.tools.sql_tools import make_run_readonly_sql
 
 logger = logging.getLogger(__name__)
@@ -215,7 +215,7 @@ def make_submit_skill(submission: Submission, *, executor: SqlExecutor, policy: 
 
 def build_agent(model: BaseChatModel, *, tools: list[BaseTool], budget: RunBudget):
     return create_deep_agent(model=model, tools=tools, system_prompt=PROMPT.read_text(),
-                             middleware=[BudgetMiddleware(budget)])
+                             middleware=[RunMiddleware(budget, agent="profiler")])
 
 
 def task_message(profile: SourceProfile) -> str:
@@ -263,14 +263,6 @@ def to_examples_sql(report: VerificationReport) -> str:
     # Questions are collapsed to one line so that none can break out of its SQL comment.
     return "\n\n".join(f"-- {' '.join(example.question.split())}\n{example.sql.rstrip().rstrip(';')};"
                        for example in report.verified_examples)
-
-
-def register_source(pool: ConnectionPool, *, slug: str, display_name: str, catalog: str, dialect: str) -> str:
-    with pool.connection() as conn:
-        return str(conn.execute(
-            """INSERT INTO sources (slug, display_name, trino_catalog, dialect) VALUES (%s, %s, %s, %s)
-               ON CONFLICT (slug) DO UPDATE SET display_name = EXCLUDED.display_name RETURNING id""",
-            (slug, display_name, catalog, dialect)).fetchone()[0])
 
 
 def generate_skill(*, model: BaseChatModel, store: SkillStore, executor: SqlExecutor, source_id: str, slug: str,

@@ -3,6 +3,7 @@
 import json
 import os
 import uuid
+from datetime import date, datetime, timezone
 
 import httpx
 import pytest
@@ -10,7 +11,8 @@ import pytest
 from agent.config import get_settings
 from agent.harness.errors import NotFound, QueryFailure
 from agent.tools.superset_client import SupersetClient
-from agent.tools.superset_payloads import ChartSlot, ChartSpec, Metric, SelectFilter, TimeFilter, TimeGrain, Viz
+from agent.tools.superset_payloads import (ChartSlot, ChartSpec, Metric, SelectFilter, TimeFilter, TimeGrain, Viz,
+                                           rows_from_positions)
 
 pytestmark = pytest.mark.integration
 
@@ -150,13 +152,15 @@ def test_every_chart_type_returns_data_from_superset(superset, built, spec):
 
 def test_time_grain_really_groups_the_data(superset, built):
     dataset = built.dataset()
+    span = "2024-01-01 : 2026-01-01"
     monthly = built.chart(ChartSpec(key="m", title="m", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
-                                    time_grain=TimeGrain.MONTH), dataset)
+                                    time_grain=TimeGrain.MONTH, time_range=span), dataset)
     quarterly = built.chart(ChartSpec(key="q", title="q", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
-                                      time_grain=TimeGrain.QUARTER), dataset)
+                                      time_grain=TimeGrain.QUARTER, time_range=span), dataset)
 
     months, quarters = superset.chart_data(monthly.id), superset.chart_data(quarterly.id)
-    assert months.row_count == pytest.approx(quarters.row_count * 3, abs=3)
+    assert months.row_count == 24
+    assert quarters.row_count == 8
     month_total = sum(r["Revenue"] for r in months.rows)
     quarter_total = sum(r["Revenue"] for r in quarters.rows)
     assert month_total == pytest.approx(quarter_total, rel=1e-6)
@@ -179,6 +183,50 @@ def test_a_chart_with_a_bad_metric_reports_a_query_failure(superset, built):
                                   metrics=[Metric(label="Bad", sql="SUM(no_such_column)")]), built.dataset())
     with pytest.raises(QueryFailure):
         superset.chart_data(chart.id)
+
+
+@pytest.mark.parametrize("grain", list(TimeGrain))
+def test_every_grain_ends_at_the_last_complete_period(superset, built, grain):
+    chart = built.chart(ChartSpec(key=f"g{grain.value}", title="t", viz=Viz.LINE, metrics=[REVENUE],
+                                  time_column="order_ts", time_grain=grain, periods=2), built.dataset())
+    assert superset.chart_data(chart.id).row_count == 2
+
+
+def test_a_monthly_trend_leaves_out_the_month_in_progress(superset, built):
+    today = date.today()
+    this_month = int(datetime(today.year, today.month, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    dataset = built.dataset()
+    chart = built.chart(ChartSpec(key="trend", title="t", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
+                                  time_grain=TimeGrain.MONTH), dataset)
+    partial = built.chart(ChartSpec(key="partial", title="t", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
+                                    time_grain=TimeGrain.MONTH, include_partial_period=True), dataset)
+
+    assert max(r["order_ts"] for r in superset.chart_data(chart.id).rows) < this_month
+    assert max(r["order_ts"] for r in superset.chart_data(partial.id).rows) == this_month
+
+
+def test_periods_are_honoured_when_the_partial_period_is_included(superset, built):
+    chart = built.chart(ChartSpec(key="incl", title="t", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
+                                  time_grain=TimeGrain.MONTH, periods=12, include_partial_period=True), built.dataset())
+    assert superset.chart_data(chart.id).row_count == 12
+
+
+def test_chart_data_reports_the_exact_window_it_covers(superset, built):
+    chart = built.chart(ChartSpec(key="w", title="t", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
+                                  time_grain=TimeGrain.MONTH, time_range="2025-01-01 : 2025-04-01"), built.dataset())
+    data = superset.chart_data(chart.id)
+    assert data.window_start == "2025-01-01 00:00:00"
+    assert data.window_end == "2025-04-01 00:00:00"
+
+
+def test_a_kpi_can_cover_the_same_complete_periods_as_a_trend(superset, built):
+    dataset = built.dataset()
+    kpi = built.chart(ChartSpec(key="k", title="k", viz=Viz.BIG_NUMBER, metrics=[REVENUE], time_column="order_ts",
+                                time_grain=TimeGrain.MONTH, periods=12), dataset)
+    trend = built.chart(ChartSpec(key="t", title="t", viz=Viz.LINE, metrics=[REVENUE], time_column="order_ts",
+                                  time_grain=TimeGrain.MONTH, periods=12), dataset)
+    total = superset.chart_data(kpi.id).rows[0]["Revenue"]
+    assert total == pytest.approx(sum(r["Revenue"] for r in superset.chart_data(trend.id).rows), rel=1e-6)
 
 
 def test_ensure_chart_updates_in_place(superset, built):
@@ -239,6 +287,21 @@ def test_dropping_a_chart_from_the_layout_removes_it_from_the_dashboard(superset
     dashboard, _, (kpi, line, pie) = _sales_dashboard(built)
     built.dashboard(title="Sales overview", rows=[[ChartSlot(chart_id=kpi.id, title=kpi.slice_name, width=12)]])
     assert {c.id for c in superset.dashboard_charts(dashboard.id)} == {kpi.id}
+
+
+def test_changing_the_layout_keeps_the_filters_unless_told_otherwise(superset, built):
+    dashboard, _, (kpi, _, _) = _sales_dashboard(built)
+    built.dashboard(title="Sales overview", rows=[[ChartSlot(chart_id=kpi.id, title=kpi.slice_name, width=12)]])
+    metadata = json.loads(superset.dashboard_detail(dashboard.id)["json_metadata"])
+    assert len(metadata["native_filter_configuration"]) == 2
+
+
+def test_a_layout_reads_back_the_same(superset, built):
+    dashboard, _, (kpi, line, pie) = _sales_dashboard(built)
+    positions = json.loads(superset.dashboard_detail(dashboard.id)["position_json"])
+    rows = rows_from_positions(positions)
+    assert [[slot.chart_id for slot in row] for row in rows] == [[kpi.id], [line.id, pie.id]]
+    assert [slot.width for slot in rows[1]] == [8, 4]
 
 
 def test_an_embedded_dashboard_is_readable_with_a_guest_token_only(superset, built):

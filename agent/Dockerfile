@@ -5,7 +5,8 @@ WORKDIR /app
 COPY requirements.lock ./
 RUN pip install --no-cache-dir --root-user-action=ignore uv==0.13.7 \
     && uv pip install --system --no-cache -r requirements.lock \
-    && uv pip install --system --no-cache pytest==9.2.0
+    && uv pip install --system --no-cache pytest==9.2.0 \
+    && playwright install --with-deps --only-shell chromium
 COPY . ./agent
 
 ENV PYTHONDONTWRITEBYTECODE=1

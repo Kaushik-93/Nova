@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
 
 import httpx
@@ -20,7 +21,7 @@ from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_expo
 from agent.harness.errors import (ConnectionFailure, InvalidRequest, NotFound, NovaError, PermissionFailure,
                                   QueryFailure, ServerFailure)
 from agent.tools.superset_payloads import (ChartSlot, ChartSpec, SelectFilter, TimeFilter, build_chart_payload,
-                                           build_json_metadata, build_positions, stable_uuid)
+                                           build_json_metadata, build_native_filter, build_positions, stable_uuid)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -58,6 +59,8 @@ class ChartData(BaseModel):
     row_count: int = 0
     query: str | None = None
     rejected_filters: list[dict[str, Any]] = Field(default_factory=list)
+    window_start: str | None = Field(default=None, description="The time window Superset actually applied")
+    window_end: str | None = None
 
 
 def dataset_uuid(key: str) -> str:
@@ -176,6 +179,18 @@ class SupersetClient:
         results = self._call("GET", f"/api/v1/{resource}/", params={"q": query}).json()["result"]
         return results[0] if results else None
 
+    def _find_all(self, resource: str, column: str, operator: str, value: Any) -> list[dict[str, Any]]:
+        query = prison.dumps({"filters": [{"col": column, "opr": operator, "value": value}], "page_size": 100})
+        return self._call("GET", f"/api/v1/{resource}/", params={"q": query}).json()["result"]
+
+    def datasets_named(self, prefix: str) -> list[Dataset]:
+        return [Dataset(id=d["id"], table_name=d["table_name"])
+                for d in self._find_all("dataset", "table_name", "sw", prefix)]
+
+    def charts_on_dataset(self, dataset_id: int) -> list[Chart]:
+        return [Chart(id=c["id"], slice_name=c["slice_name"], viz_type=c.get("viz_type"))
+                for c in self._find_all("chart", "datasource_id", "eq", dataset_id)]
+
     # --- Databases -----------------------------------------------------------
 
     def database_id(self, name: str) -> int:
@@ -260,7 +275,8 @@ class SupersetClient:
             raise QueryFailure(str(result["error"]))
         return ChartData(columns=result.get("colnames") or [], rows=result.get("data") or [],
                          row_count=result.get("rowcount") or 0, query=result.get("query"),
-                         rejected_filters=result.get("rejected_filters") or [])
+                         rejected_filters=result.get("rejected_filters") or [],
+                         window_start=_timestamp(result.get("from_dttm")), window_end=_timestamp(result.get("to_dttm")))
 
     def delete_chart(self, chart_id: int) -> None:
         self._call("DELETE", f"/api/v1/chart/{chart_id}")
@@ -269,10 +285,11 @@ class SupersetClient:
 
     def ensure_dashboard(self, *, slug: str, title: str, rows: list[list[ChartSlot]] | None = None,
                          filters: list[SelectFilter | TimeFilter] | None = None, published: bool = True) -> Dashboard:
-        """Create or update a dashboard, replacing its layout and filters.
+        """Create or update a dashboard, replacing its layout.
 
-        Superset takes the chart list from the layout, so call this after the
-        charts exist. With `rows=None` it only makes sure the dashboard exists.
+        Superset takes the chart list from the layout, so call this after the charts
+        exist. With `rows=None` it only makes sure the dashboard exists, and with
+        `filters=None` it keeps the filters already there.
         """
         def run() -> Dashboard:
             existing = self._find_one("dashboard", "slug", slug)
@@ -286,11 +303,21 @@ class SupersetClient:
             update: dict[str, Any] = {"dashboard_title": title, "published": published}
             if rows is not None:
                 positions = build_positions(title, rows)
-                update["json_metadata"] = json.dumps(build_json_metadata(positions, filters or []))
+                native = ([build_native_filter(f) for f in filters] if filters is not None
+                          else self._current_filters(dashboard_id))
+                update["json_metadata"] = json.dumps(build_json_metadata(positions, native))
             self._call("PUT", f"/api/v1/dashboard/{dashboard_id}", json=update)
             return self.get_dashboard(dashboard_id)
 
         return self._retrying(run)
+
+    def _current_filters(self, dashboard_id: int) -> list[dict[str, Any]]:
+        metadata = self.dashboard_detail(dashboard_id).get("json_metadata") or "{}"
+        return json.loads(metadata).get("native_filter_configuration", [])
+
+    def find_dashboard(self, slug: str) -> Dashboard | None:
+        match = self._find_one("dashboard", "slug", slug)
+        return self.get_dashboard(match["id"]) if match else None
 
     def get_dashboard(self, dashboard_id: int | str) -> Dashboard:
         return Dashboard.model_validate(self._call("GET", f"/api/v1/dashboard/{dashboard_id}").json()["result"])
@@ -300,7 +327,8 @@ class SupersetClient:
 
     def dashboard_charts(self, dashboard_id: int | str) -> list[Chart]:
         result = self._call("GET", f"/api/v1/dashboard/{dashboard_id}/charts").json()["result"]
-        return [Chart(id=c["id"], slice_name=c["slice_name"], viz_type=c.get("viz_type")) for c in result]
+        return [Chart(id=c["id"], slice_name=c["slice_name"], viz_type=(c.get("form_data") or {}).get("viz_type"))
+                for c in result]
 
     def delete_dashboard(self, dashboard_id: int) -> None:
         self._call("DELETE", f"/api/v1/dashboard/{dashboard_id}")
@@ -323,6 +351,15 @@ class SupersetClient:
             "rls": rls or [],
         }))
         return response.json()["token"]
+
+
+def _timestamp(value: Any) -> str | None:
+    """Superset reports time windows as epoch milliseconds."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
 
 
 def _error_message(response: httpx.Response) -> str:

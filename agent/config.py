@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     database_url: str = ""
 
     nova_skills_dir: str = "skills"
+    nova_ui_origin: str = "http://localhost:13000"
+    nova_chart_repair_rounds: int = 3
 
     nova_max_steps: int = 150
     nova_max_tokens: int = 2_000_000

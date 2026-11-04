@@ -38,3 +38,15 @@ CREATE TABLE IF NOT EXISTS skills (
     reviewed_by        text,
     updated_at         timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS dashboards (
+    slug        text PRIMARY KEY,
+    thread_id   text NOT NULL UNIQUE,
+    superset_id integer NOT NULL,
+    embed_uuid  text,
+    title       text NOT NULL,
+    summary     text NOT NULL DEFAULT '',
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);

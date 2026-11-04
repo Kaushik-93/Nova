@@ -41,6 +41,8 @@ google-auth==2.62.1
     # via google-genai
 google-genai==2.34.0
     # via langchain-google-genai
+greenlet==3.5.6
+    # via playwright
 h11==0.16.0
     # via
     #   httpcore
@@ -139,6 +141,8 @@ packaging==26.3
     #   deepagents
     #   langchain-core
     #   langsmith
+playwright==1.64.1
+    # via -r agent/requirements.txt
 prison==0.2.1
     # via -r agent/requirements.txt
 psycopg==3.3.8
@@ -174,6 +178,8 @@ pydantic-core==2.50.2
     # via pydantic
 pydantic-settings==2.16.2
     # via -r agent/requirements.txt
+pyee==14.0.0
+    # via playwright
 python-dateutil==4.0.0
     # via trino
 python-dotenv==1.2.4
@@ -235,6 +241,7 @@ typing-extensions==4.16.0
     #   pydantic
     #   pydantic-core
     #   pydantic-settings
+    #   pyee
     #   typing-inspection
 typing-inspection==0.4.5
     # via

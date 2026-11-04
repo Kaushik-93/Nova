@@ -207,11 +207,16 @@ def store(tmp_path, pool):
 
 @pytest.fixture
 def source_id(pool):
+    # Removed afterwards: the agent treats every row in this table as a real source.
     slug = f"test-{uuid.uuid4().hex[:8]}"
     with pool.connection() as conn:
-        return str(conn.execute(
+        source = str(conn.execute(
             "INSERT INTO sources (slug, display_name, trino_catalog, dialect) VALUES (%s, %s, %s, 'postgres') "
             "RETURNING id", (slug, "Test", slug)).fetchone()[0])
+    yield source
+    with pool.connection() as conn:
+        conn.execute("DELETE FROM skills WHERE source_id = %s", (source,))
+        conn.execute("DELETE FROM sources WHERE id = %s", (source,))
 
 
 REVENUE = Metric(label="Revenue", sql="SUM(i.quantity * i.unit_price_cents) / 100.0",

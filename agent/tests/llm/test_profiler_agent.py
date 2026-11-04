@@ -18,9 +18,10 @@ from agent.harness.budgets import BudgetLimits, RunBudget
 from agent.harness.executor import SqlExecutor
 from agent.harness.guardrails import SqlPolicy
 from agent.llm import build_model
-from agent.subagents.profiler import generate_skill, metric_sql, register_source
-from agent.tools.skill_store import Freshness, SkillStore
+from agent.subagents.profiler import generate_skill, metric_sql
 from agent.tools.profiler import Profiler
+from agent.tools.skill_store import Freshness, SkillStore
+from agent.tools.sources import register_source
 
 pytestmark = [pytest.mark.llm, pytest.mark.integration]
 
@@ -41,6 +42,15 @@ def executor(pool):
 @pytest.fixture(scope="module")
 def store(pool, tmp_path_factory):
     return SkillStore(tmp_path_factory.mktemp("skills"), pool)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def remove_test_sources(pool):
+    """The agent treats every row in `sources` as a real source."""
+    yield
+    with pool.connection() as conn:
+        conn.execute("DELETE FROM skills WHERE slug LIKE 't-%'")
+        conn.execute("DELETE FROM sources WHERE slug LIKE 't-%'")
 
 
 def context() -> RunContext:

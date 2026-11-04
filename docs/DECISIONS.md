@@ -172,3 +172,55 @@ text can change.
 
 Tests that call the real model are marked `llm` and run with `make test-llm`, so the normal
 suite is free and works with no key. Evals in Phase 9 need the same decision.
+
+## D-026: Agents finish through a tool the harness controls
+
+`finish_dashboard` runs every chart itself and refuses a dashboard with a failing chart, or
+with charts covering different periods. The model can't declare success, and can't skip
+the check. As with `submit_skill`, failures go back as feedback a limited number of times,
+and what still fails is reported to the user.
+
+## D-027: Date windows are decided in code, and models are told the date
+
+Models don't know today's date. In one run the verifier assumed an earlier month,
+"disproved" a correct dashboard with a confident calculation, and the repair broke it.
+So every prompt states the date, `superset_get_chart_data` reports the exact window Superset
+applied, and the verifier checks that window rather than working one out. Trends end at
+the last complete period in `ChartSpec`, not by instruction (D-013).
+
+## D-028: The guest token never passes through the model
+
+The prompt lists `superset_guest_token` as a tool, but a token in the conversation would be
+a secret in agent context and in the checkpoints. The tool only prepares embedding. The
+run boundary creates the token and returns it to the caller.
+
+## D-029: Shared build state comes from Superset
+
+Subagents start empty, and given no way to see what existed they created seven duplicate
+datasets during one repair. `superset_build_status` reads Superset directly, so it also
+works after a resume or on a follow-up. A chart's key is kept in its `description`, because
+Superset has nowhere else to put it. Datasets and charts per dashboard are capped, and
+finishing removes anything unused, touching only objects with this dashboard's prefix.
+
+## D-030: The profiler runs as a job, not a `task` subagent
+
+Sources are profiled when connected, in the background, when no main agent exists. So it's
+a deep agent of its own with only the tools it needs, started by the API. By the time a
+dashboard is requested the skill is there, which is what lets a second dashboard reuse it.
+
+## D-031: `load_skill` sits alongside Deep Agents' skills
+
+`SkillsMiddleware` gives progressive disclosure: only names and descriptions stay in context.
+The spec also requires a freshness check before a skill is used, which reading a file can't
+do. So agents load through `load_skill`, which checks freshness and refreshes if needed.
+
+## D-032: One conversation is one dashboard
+
+A dashboard's key is a hash of its thread id. Retries, resumes and follow-ups therefore all
+reach the same objects without any lookup table.
+
+## D-033: The verifier reports problems and notes separately
+
+An earlier run spent a repair round on an axis label. Only something that makes a number
+wrong, or stops a chart being read, is worth another round. The label itself was fixed in
+code: each time grain now has an explicit format.
