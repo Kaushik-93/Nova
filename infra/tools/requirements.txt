@@ -1,0 +1,6 @@
+httpx==0.28.1
+psycopg[binary]==3.3.8
+pymysql==1.2.3
+pytest==9.2.0
+redis==8.1.0
+trino==0.340.0

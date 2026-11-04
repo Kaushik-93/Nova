@@ -1,0 +1,5 @@
+# The apache/superset image ships no database drivers; these are the ones Nova
+# needs. Superset itself pins SQLAlchemy to 1.4, which the trino dialect supports.
+psycopg2-binary==2.9.13
+pymysql==1.2.3
+trino==0.340.0

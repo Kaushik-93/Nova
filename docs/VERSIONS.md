@@ -1,0 +1,108 @@
+# Versions
+
+Exact versions Nova is pinned to, and the API details checked against them. All
+checked on 2026-11-04 by reading the installed package source, the image, or the
+registry, rather than from memory.
+
+## Images
+
+| Component | Version | Notes |
+|---|---|---|
+| Apache Superset | `apache/superset:6.1.0` | Latest stable. 7.0.0 is at rc2. Extended by `infra/superset/Dockerfile`. |
+| Trino | `trinodb/trino:484` | Java 25. |
+| Postgres | `postgres:17.11-alpine` | Metadata and demo source. |
+| Redis | `redis:8.8.4-alpine` | |
+| MySQL | `mysql:8.4.13` | LTS line; demo source. |
+| Python (tools) | `python:3.13-slim` | Seed job and test runner. |
+
+## Python
+
+| Package | Version | Used by |
+|---|---|---|
+| psycopg2-binary | 2.9.13 | Superset |
+| pymysql | 1.2.3 | Superset, tools |
+| trino | 0.340.0 | Superset, tools |
+| httpx | 0.28.1 | tools |
+| psycopg[binary] | 3.3.8 | tools |
+| pytest | 9.2.0 | tools |
+| redis | 8.1.0 | tools |
+
+Verified for later phases, and pinned when they start:
+
+| Package | Version |
+|---|---|
+| deepagents | 0.7.32 |
+| langchain | 1.4.8 |
+| langchain-core | 1.7.4 |
+| langgraph | 1.2.19 |
+| langchain-anthropic | 1.7.9 |
+| anthropic | 2.4.0 |
+| langgraph-checkpoint-postgres | 3.2.0 |
+| langgraph-store-postgres | 0.1.0 |
+| sqlglot | 30.29.0 |
+| fastapi | 0.162.0 |
+| uvicorn | 0.54.0 |
+| sse-starlette | 3.6.0 |
+| pydantic | 2.14.2 |
+| cryptography | 50.0.2 |
+| langsmith | 0.14.17 |
+| playwright | 1.64.1 |
+
+## JavaScript (verified, pinned in Phase 7)
+
+| Package | Version |
+|---|---|
+| next | 16.4.5 |
+| react | 19.3.1 |
+| tailwindcss | 4.3.4 |
+| typescript | 7.0.2 |
+| @superset-ui/embedded-sdk | 0.4.0 |
+
+## API details that shaped the design
+
+**Superset 6.1.0**
+- The image contains no database drivers, so `psycopg2`, `trino` and a MySQL driver
+  are added in a derived image.
+- It runs with `SUPERSET_ENV=production`, which enables the rate limiter, so it
+  needs a shared store (Redis db 5).
+- It inherits a `HEALTHCHECK` that curls port 8088. Celery workers must replace it.
+- `GUEST_ROLE_NAME` defaults to `Public`, and `GUEST_TOKEN_JWT_SECRET` defaults to a
+  published value. Both are overridden.
+- Talisman's default `X-Frame-Options: SAMEORIGIN` blocks embedding. Nova sets
+  `frame_options: None` and uses CSP `frame-ancestors`.
+- `/embedded/<uuid>` returns 403 when the `Referer` isn't in the dashboard's
+  `allowed_domains`.
+- Guest tokens come from `POST /api/v1/security/guest_token/` and need
+  `can_grant_guest_token`.
+- `POST /api/v1/sqllab/execute/` rejects a `json` field. An async response carries
+  the numeric id in `query.queryId`; `query.id` is the client id.
+
+**Trino 484**
+- `CREATE CATALOG` logs the full statement, including any password, and shows it in
+  the Web UI.
+- JDBC connectors accept `credential-provider.type=FILE` with
+  `connection-credential-file`, which keeps the password out of the statement.
+- The file-based access-control plugin refuses `CREATE CATALOG` for every user,
+  even with `allow: all`.
+- A coordinator can't shut down gracefully: `PUT /v1/info/state` fails with `Cannot
+  shutdown coordinator`.
+
+**Deep Agents 0.7.32**
+- Skill names may only contain lowercase alphanumerics and single hyphens, and must
+  match the directory name. A bad name logs a warning but still loads.
+- Only `name`, `description`, `license`, `compatibility`, `metadata` and
+  `allowed-tools` are read from frontmatter. Nova's own fields (`source_id`,
+  `schema_fingerprint`, ...) must go under `metadata:`, whose values become strings.
+- `skills=` takes directories of skill directories and looks one level deep, so
+  `/skills/_joins/` must be passed as a separate source.
+- Descriptions over 1,024 characters are truncated.
+
+**langchain-anthropic 1.7.9 with `claude-opus-5-5`**
+- `temperature` and `thinking: disabled` are rejected. Lower effort with
+  `reasoning_effort` instead.
+- Forced `tool_choice` returns a 400, so structured output must use
+  `method="json_schema"` or rely on the library's guard for this model.
+
+**@superset-ui/embedded-sdk 0.4.0**
+- `embedDashboard({ id, supersetDomain, mountPoint, fetchGuestToken, ... })`, and
+  `setThemeMode('dark' | 'default' | 'system')` on the returned object.

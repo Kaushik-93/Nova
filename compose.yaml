@@ -1,0 +1,7 @@
+# Entry point so `docker compose` works from the repo root.
+# Services are defined in infra/docker-compose.yml.
+name: nova
+
+include:
+  - path: infra/docker-compose.yml
+    env_file: .env
