@@ -13,6 +13,7 @@ from agent.api.main import create_app
 from agent.api.runs import RunManager
 from agent.config import get_settings
 from agent.dashboard_agent import RunResult, RunStatus
+from agent.tools.superset_payloads import ChartSpec, Metric, Viz
 
 pytestmark = pytest.mark.integration
 
@@ -175,6 +176,32 @@ def test_a_skill_is_served_with_its_definitions(client):
         pytest.skip("generate it with make skill")
     skill = client.get("/api/skills/demo-rental").json()
     assert skill["metrics"] and skill["gotchas"] and skill["guide"]
+
+
+def test_a_chart_built_by_nova_can_be_previewed(client):
+    services = client.app.state.services
+    key = f"preview-{uuid.uuid4().hex[:8]}"
+    database = services.superset.database_id("Nova Trino")
+    dataset = services.superset.ensure_dataset(key=key, name=key, database_id=database, sql="""
+        SELECT r.region_name, CAST(o.order_ts AS timestamp(3)) AS order_ts, o.tax_cents / 100.0 AS revenue
+        FROM demo_shop.shop.orders o JOIN demo_shop.shop.regions r ON r.region_id = o.region_id""")
+    spec = ChartSpec(key="by-region", title="By region", viz=Viz.BAR, dimensions=["region_name"], y_axis_format="$,.0f",
+                     metrics=[Metric(label="Revenue", sql="SUM(revenue)")])
+    chart = services.superset.ensure_chart(spec, dataset_id=dataset.id, dashboard_key=key)
+    try:
+        preview = client.get(f"/api/charts/{chart.id}/preview").json()
+        assert preview["viz"] == "echarts_timeseries_bar"
+        assert preview["x_axis"] == "region_name"
+        assert preview["format"] == "$,.0f"
+        assert preview["row_count"] == 8
+        assert preview["columns"] == ["region_name", "Revenue"]
+    finally:
+        services.superset.delete_chart(chart.id)
+        services.superset.delete_dataset(dataset.id)
+
+
+def test_only_charts_nova_built_can_be_previewed(client):
+    assert client.get("/api/charts/999999/preview").status_code == 404
 
 
 def test_an_unknown_dashboard_is_404(client):

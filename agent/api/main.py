@@ -24,8 +24,10 @@ from agent.llm import build_model
 from agent.tools.skill_store import SkillStore, parse_frontmatter
 from agent.tools.sources import list_sources
 from agent.tools.superset_client import SupersetClient
+from agent.tools.superset_payloads import CHART_KEY_PREFIX
 
 POLL_SECONDS = 0.5
+PREVIEW_ROWS = 200
 # Authentication comes with the rest of Phase 6. Until then everything acts as one local user.
 LOCAL_USER = "local"
 STATUS_BY_CATEGORY = {ErrorCategory.NOT_FOUND: 404, ErrorCategory.PERMISSION: 403, ErrorCategory.INVALID_REQUEST: 400}
@@ -177,6 +179,22 @@ def create_app() -> FastAPI:
         return {"slug": slug, "title": title, "embed_uuid": embed_uuid, "filters": filters,
                 "superset_url": app_services.settings.superset_public_url,
                 "guest_token": app_services.superset.guest_token(embed_uuid, username=LOCAL_USER)}
+
+    @app.get("/api/charts/{chart_id}/preview")
+    def chart_preview(chart_id: int, request: Request) -> dict[str, Any]:
+        """A chart's data, for the live preview while a dashboard is being built. It's read
+        from Superset here rather than kept in the run's events, so no data is copied."""
+        superset = services(request).superset
+        detail = superset.chart_detail(chart_id)
+        if not (detail.get("description") or "").startswith(CHART_KEY_PREFIX):
+            raise NotFound(f"chart {chart_id} wasn't built by Nova")
+        params = json.loads(detail.get("params") or "{}")
+        data = superset.chart_data(chart_id)
+        return {"chart_id": chart_id, "title": detail["slice_name"], "viz": params.get("viz_type"),
+                "columns": data.columns, "rows": data.rows[:PREVIEW_ROWS], "row_count": data.row_count,
+                "x_axis": params.get("x_axis"), "groupby": params.get("groupby") or [],
+                "time_grain": params.get("time_grain_sqla"),
+                "format": params.get("y_axis_format") or params.get("number_format")}
 
     # --- Sources and skills ---------------------------------------------------
 

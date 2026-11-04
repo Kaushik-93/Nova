@@ -52,14 +52,22 @@ def pool():
 
 
 @pytest.fixture
-def runtime(pool):
+def events():
+    return []
+
+
+@pytest.fixture
+def runtime(pool, events):
     thread = uuid.uuid4().hex
     context = RunContext(run_id=f"tools-{thread[:8]}", user_id="tester")
     # Constructing a client makes no network call, and these tests never reach the model.
     model = ChatOpenAI(model="gpt-6-luna", api_key="unused", use_responses_api=True)
-    runtime = make_runtime(get_settings(), pool, model, context=context, dashboard_key=dashboard_key_for(thread))
+    runtime = make_runtime(get_settings(), pool, model, context=context, dashboard_key=dashboard_key_for(thread),
+                           thread_id=thread, sink=events.append)
     yield runtime
     state, superset = runtime.state, runtime.superset
+    with pool.connection() as conn:
+        conn.execute("DELETE FROM dashboards WHERE thread_id = %s", (thread,))
 
     def remove(delete, object_id):
         with contextlib.suppress(NotFound):  # finishing may already have removed it
@@ -223,6 +231,13 @@ def test_a_crowded_layout_wraps(tools, runtime):
     assert [[slot["width"] for slot in row] for row in rows] == [[6, 6], [6, 6]]
 
 
+def test_a_row_of_kpis_stays_compact(tools, runtime):
+    _, (kpi, other) = build(tools, KPI, {**KPI, "key": "k2", "title": "Second"})
+    tools["superset_create_dashboard"].invoke({"title": "t", "rows": [[{"chart_id": kpi, "width": 6, "height": 50},
+                                                                       {"chart_id": other, "width": 6, "height": 50}]]})
+    assert [slot["height"] for slot in json.loads(tools["superset_get_dashboard"].invoke({}))["rows"][0]] == [20, 20]
+
+
 def test_finish_refuses_a_chart_covering_a_different_period(tools, runtime):
     _, (trend, all_time) = build(tools, TREND, {**KPI, "key": "all-time", "title": "All time"})
     tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([trend, all_time])})
@@ -267,6 +282,69 @@ def test_a_filter_on_a_column_every_dataset_has_is_accepted(tools, runtime):
     tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([trend]),
                                                "filters": [{"name": "Region", "dataset_id": dataset, "column": "region_name"}]})
     assert tools["finish_dashboard"].invoke({"summary": "s", "definitions": []}) == "Finished."
+
+
+def test_each_finished_chart_is_announced_without_its_data(tools, events):
+    _, (trend,) = build(tools, TREND)
+    ready = [e for e in events if e["event"] == "chart_ready"]
+    assert ready == [{"event": "chart_ready", "agent": "main", "run_id": ready[0]["run_id"], "chart_id": trend,
+                      "key": "trend", "title": "Revenue by month", "viz": "echarts_timeseries_line"}]
+
+
+def test_the_dashboard_can_be_shown_as_soon_as_it_exists(tools, runtime, events, pool):
+    _, (trend,) = build(tools, TREND)
+    tools["superset_create_dashboard"].invoke({"title": "Sales", "rows": layout([trend])})
+
+    ready = next(e for e in events if e["event"] == "dashboard_ready")
+    assert ready["slug"] == runtime.state.dashboard_key
+    with pool.connection() as conn:
+        row = conn.execute("SELECT title, embed_uuid FROM dashboards WHERE slug = %s", (ready["slug"],)).fetchone()
+    assert row[0] == "Sales" and row[1], "ready to embed before verification has run"
+
+
+def test_a_failed_chart_is_not_announced(tools, events):
+    dataset, _ = build(tools, KPI)
+    events.clear()
+    tools["superset_create_chart"].invoke({"dataset_id": dataset, "spec": {
+        **KPI, "key": "bad", "metrics": [{"label": "Bad", "sql": "SUM(no_such_column)"}]}})
+    assert not any(e["event"] == "chart_ready" for e in events)
+
+
+def test_inspecting_shows_filters_windows_and_sql(tools, runtime):
+    dataset, (trend,) = build(tools, TREND)
+    tools["superset_create_dashboard"].invoke({"title": "t", "rows": layout([trend]),
+                                               "filters": [{"name": "Region", "dataset_id": dataset, "column": "region_name"}]})
+
+    report = json.loads(tools["superset_inspect_dashboard"].invoke({}))
+
+    region = next(f for f in report["filters"] if f["name"] == "Region")
+    assert region == {"name": "Region", "type": "filter_select", "column": "region_name", "missing_from": []}
+    assert report["charts"][0]["time_window"].endswith("DATETRUNC(DATETIME('today'), month)")
+    assert "demo_shop.shop.order_items" in report["datasets"][0]["sql"]
+
+
+def test_inspecting_names_the_charts_a_filter_misses(tools, runtime):
+    with_region, (trend,) = build(tools, TREND)
+    other = tools["superset_create_dataset"].invoke({"key": "other", "grain": ["order_id"], "sql": """
+        SELECT o.order_id, CAST(o.order_ts AS timestamp(3)) AS order_ts, o.tax_cents / 100.0 AS revenue
+        FROM demo_shop.shop.orders o"""})
+    other_chart = tools["superset_create_chart"].invoke({"dataset_id": int(other.split("dataset_id=")[1].split(",")[0]),
+                                                         "spec": {**TREND, "key": "o", "title": "No region"}})
+    tools["superset_create_dashboard"].invoke({
+        "title": "t", "rows": layout([trend, int(other_chart.split("chart_id=")[1].split(",")[0])]),
+        "filters": [{"name": "Region", "dataset_id": with_region, "column": "region_name"}]})
+
+    report = json.loads(tools["superset_inspect_dashboard"].invoke({}))
+
+    assert next(f for f in report["filters"] if f["name"] == "Region")["missing_from"] == ["No region"]
+
+
+def test_a_guessed_skill_name_resolves_through_the_plan(runtime):
+    if not runtime.store.exists("demo-shop"):
+        pytest.skip("needs the demo skill")
+    runtime.state.plan = {"sources": ["demo-shop"]}
+    tools = {tool.name: tool for tool in make_source_tools(runtime)}
+    assert not tools["load_skill"].invoke({"name": "vehicle_rentals"}).startswith("FAILED")
 
 
 def test_build_status_shows_what_exists_with_keys(tools, runtime):

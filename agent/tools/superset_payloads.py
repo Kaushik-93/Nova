@@ -24,6 +24,7 @@ DEFAULT_ROW_HEIGHT = 50
 MAX_KPIS_PER_ROW = 4
 MAX_CHARTS_PER_ROW = 2
 KPI_TYPES = {"big_number_total", "big_number"}
+KPI_ROW_HEIGHT = 20
 
 
 def stable_uuid(kind: str, key: str) -> UUID:
@@ -59,6 +60,7 @@ GRAIN_UNITS = {TimeGrain.DAY: "day", TimeGrain.WEEK: "week", TimeGrain.MONTH: "m
 GRAIN_FORMATS = {TimeGrain.DAY: "%b %d", TimeGrain.WEEK: "%b %d", TimeGrain.MONTH: "%b %Y",
                  TimeGrain.QUARTER: "%Y Q%q", TimeGrain.YEAR: "%Y"}
 NO_FILTER = "No filter"
+COLOR_SCHEME = "novaColors"  # defined in superset_config.py
 FIXED_DATE = re.compile(r"\b(19|20)\d{2}-\d{2}")
 # Superset has nowhere else to keep a chart's stable key, and a follow-up request needs it
 # to update the chart rather than make another one.
@@ -184,6 +186,7 @@ def build_form_data(spec: ChartSpec, dataset_id: int) -> dict[str, Any]:
     form: dict[str, Any] = {
         "datasource": f"{dataset_id}__table",
         "viz_type": spec.viz.value,
+        "color_scheme": COLOR_SCHEME,
         "adhoc_filters": _adhoc_filters(spec),
         "row_limit": spec.row_limit,
     }
@@ -192,7 +195,7 @@ def build_form_data(spec: ChartSpec, dataset_id: int) -> dict[str, Any]:
 
     match spec.viz:
         case Viz.BIG_NUMBER:
-            form |= {"metric": metrics[0], "y_axis_format": spec.y_axis_format, "header_font_size": 0.4,
+            form |= {"metric": metrics[0], "y_axis_format": spec.y_axis_format, "header_font_size": 0.3,
                      "subheader_font_size": 0.15}
         case Viz.BIG_NUMBER_TREND:
             form |= {"metric": metrics[0], "x_axis": x_axis, "y_axis_format": spec.y_axis_format,
@@ -386,8 +389,10 @@ def build_json_metadata(positions: dict[str, Any], filters: list[dict[str, Any]]
         "positions": positions,
         "native_filter_configuration": filters,
         "cross_filters_enabled": True,
-        "color_scheme": "supersetColors",
-        "filter_bar_orientation": "VERTICAL",
+        "color_scheme": COLOR_SCHEME,
+        # Filters in a row above the charts, so that they scope everything below them and
+        # the charts keep the full width, which matters most inside an embed.
+        "filter_bar_orientation": "HORIZONTAL",
         "refresh_frequency": 0,
         "timed_refresh_immune_slices": [],
         "expanded_slices": {},

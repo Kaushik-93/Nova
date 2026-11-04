@@ -105,15 +105,17 @@ def build_agent(runtime: Runtime, *, require_approval: bool, checkpointer: BaseC
         SubAgent(name="chart_designer", system_prompt=load_prompt("chart_designer"), middleware=[middleware("chart_designer")],
                  description="Picks chart types and creates the charts, layout and native filters.",
                  tools=pick("superset_build_status", "superset_create_chart", "superset_create_dashboard",
-                            "superset_get_dashboard", "superset_update_dashboard", "superset_get_chart_data")),
+                            "superset_get_dashboard", "superset_update_dashboard", "superset_inspect_dashboard",
+                            "superset_get_chart_data")),
         SubAgent(name="verifier", system_prompt=load_prompt("verifier"), middleware=[middleware("verifier")],
                  description="Checks a built dashboard's numbers against the definitions, and that it renders.",
                  tools=[source_tools["load_skill"], run_sql,
-                        *pick("superset_build_status", "superset_get_chart_data", "render_dashboard_screenshot")]),
+                        *pick("superset_build_status", "superset_inspect_dashboard", "superset_get_chart_data",
+                              "render_dashboard_screenshot")]),
     ]
     main_tools = [*source_tools.values(), *make_planning_tools(runtime, require_approval=require_approval),
-                  *pick("superset_build_status", "superset_get_dashboard", "superset_guest_token",
-                        "finish_dashboard")]
+                  *pick("superset_build_status", "superset_get_dashboard", "superset_inspect_dashboard",
+                        "superset_guest_token", "finish_dashboard")]
 
     skills_backend = FilesystemBackend(root_dir=runtime.settings.nova_skills_dir, virtual_mode=True)
     backend = CompositeBackend(default=StateBackend(), routes={"/skills/": skills_backend})
@@ -129,18 +131,6 @@ def load_preferences(store: BaseStore | None) -> str:
         return ""
     items = store.search(PREFERENCES_NAMESPACE)
     return "\n".join(f"- {item.key}: {item.value.get('value')}" for item in items)
-
-
-def save_dashboard(pool: ConnectionPool, runtime: Runtime, thread_id: str) -> None:
-    state = runtime.state
-    with pool.connection() as conn:
-        conn.execute(
-            """INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, summary, created_by)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT (slug) DO UPDATE SET embed_uuid = EXCLUDED.embed_uuid, title = EXCLUDED.title,
-                   summary = EXCLUDED.summary, updated_at = now()""",
-            (state.dashboard_key, thread_id, state.dashboard.id, state.embed_uuid, state.dashboard.dashboard_title,
-             state.summary, runtime.context.user_id))
 
 
 def interrupt_payload(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -172,7 +162,7 @@ def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatMo
     if not thread_id:
         raise InvalidRequest("a run needs a thread_id: it's what identifies its dashboard")
     runtime = make_runtime(settings, pool, model, context=context, dashboard_key=dashboard_key_for(thread_id),
-                           sink=sink)
+                           thread_id=thread_id, sink=sink)
     try:
         runtime.state.dashboard = runtime.superset.find_dashboard(runtime.state.dashboard_key)
         agent = build_agent(runtime, require_approval=require_approval, checkpointer=checkpointer, store=store)
@@ -205,7 +195,7 @@ def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatMo
         state = runtime.state
         if state.embed_uuid is None:
             state.embed_uuid = runtime.superset.enable_embedding(state.dashboard.id, [settings.nova_ui_origin])
-        save_dashboard(pool, runtime, thread_id)
+        runtime.save_dashboard()
         outcome = result_from(runtime, RunStatus.FINISHED, thread_id)
         outcome.guest_token = runtime.superset.guest_token(state.embed_uuid, username=context.user_id)
         return outcome

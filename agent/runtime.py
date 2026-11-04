@@ -27,6 +27,7 @@ class BuildState:
     what exists."""
 
     dashboard_key: str
+    thread_id: str = ""
     dashboard: Dashboard | None = None
     charts: dict[int, ChartSpec] = field(default_factory=dict)
     datasets: dict[str, int] = field(default_factory=dict)
@@ -59,9 +60,27 @@ class Runtime:
     def close(self) -> None:
         self.superset.close()
 
+    def emit(self, event: str, **fields: Any) -> None:
+        """Tell the live view something happened. Only ids and labels go here: a chart's data
+        is fetched when it's shown, so no source data is copied into the event log."""
+        if self.sink:
+            self.sink({"event": event, "agent": "main", "run_id": self.context.run_id, **fields})
+
+    def save_dashboard(self) -> None:
+        """Record the dashboard as soon as it exists, so it can be shown while checks run."""
+        state = self.state
+        with self.pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, summary, created_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (slug) DO UPDATE SET embed_uuid = EXCLUDED.embed_uuid, title = EXCLUDED.title,
+                       summary = COALESCE(NULLIF(EXCLUDED.summary, ''), dashboards.summary), updated_at = now()""",
+                (state.dashboard_key, state.thread_id, state.dashboard.id, state.embed_uuid,
+                 state.dashboard.dashboard_title, state.summary, self.context.user_id))
+
 
 def make_runtime(settings: Settings, pool: ConnectionPool, model: BaseChatModel, *, context: RunContext,
-                 dashboard_key: str, sink: EventSink | None = None) -> Runtime:
+                 dashboard_key: str, thread_id: str = "", sink: EventSink | None = None) -> Runtime:
     audit = AuditLog(pool)
 
     def audit_write(method: str, path: str, status: int) -> None:
@@ -81,5 +100,5 @@ def make_runtime(settings: Settings, pool: ConnectionPool, model: BaseChatModel,
                                       max_wall_seconds=settings.nova_max_wall_seconds,
                                       max_sql_queries=settings.nova_max_sql_queries)),
         policy=SqlPolicy(allowed_catalogs=frozenset(s.trino_catalog for s in sources), max_rows=1000),
-        state=BuildState(dashboard_key=dashboard_key),
+        state=BuildState(dashboard_key=dashboard_key, thread_id=thread_id),
     )

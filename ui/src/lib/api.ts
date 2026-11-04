@@ -4,8 +4,14 @@ export type RunEvent = {
   id: number;
   at: string;
   agent: string;
-  event: "model_start" | "model" | "tool_start" | "tool_end" | "tool_blocked" | "plan";
+  event: "model_start" | "model" | "tool_start" | "tool_end" | "tool_blocked" | "plan" | "chart_ready"
+    | "dashboard_ready" | "dashboard_updated";
   plan?: Plan;
+  chart_id?: number;
+  key?: string;
+  title?: string;
+  viz?: string;
+  slug?: string;
   tool?: string;
   subagent?: string;
   detail?: string;
@@ -31,7 +37,15 @@ export type Timing = {
   explanation: string[];
 };
 
-export type PlannedChart = { key: string; title: string; viz: string; metric: string; dimensions: string[]; time_grain: string | null };
+export type PlannedChart = {
+  key: string;
+  title: string;
+  viz: string;
+  metric: string;
+  dimensions: string[];
+  time_grain: string | null;
+  width?: number;
+};
 export type Plan = { title: string; goal: string; sources: string[]; charts: PlannedChart[]; filters: string[]; assumptions: string[] };
 
 export type RunResult = {
@@ -58,7 +72,27 @@ export type Run = {
   timing: Timing;
 };
 
-export type RunListItem = { run_id: string; thread_id: string; prompt: string; status: string; started_at: string; title: string | null };
+export type RunListItem = {
+  run_id: string;
+  thread_id: string;
+  prompt: string;
+  status: string;
+  started_at: string;
+  title: string | null;
+  summary: string | null;
+};
+export type ChartPreview = {
+  chart_id: number;
+  title: string;
+  viz: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  x_axis: string | null;
+  groupby: string[];
+  time_grain: string | null;
+  format: string | null;
+};
 export type DashboardRow = { slug: string; thread_id: string; superset_id: number; title: string; summary: string; updated_at: string };
 export type EmbedInfo = {
   slug: string;
@@ -119,6 +153,7 @@ export const api = {
   listRuns: (threadId?: string) => request<RunListItem[]>(`/api/runs${threadId ? `?thread_id=${threadId}` : ""}`),
   listDashboards: () => request<DashboardRow[]>("/api/dashboards"),
   embed: (slug: string) => request<EmbedInfo>(`/api/dashboards/${slug}/embed`),
+  chartPreview: (chartId: number) => request<ChartPreview>(`/api/charts/${chartId}/preview`),
   sources: () => request<SourceRow[]>("/api/sources"),
   skill: (slug: string) => request<Skill>(`/api/skills/${slug}`),
   approveSkill: (slug: string) => request(`/api/skills/${slug}/approve`, { method: "POST", body: "{}" }),

@@ -65,6 +65,8 @@ Verified for later phases, and pinned when they start:
 | tailwindcss | 4.3.4 |
 | typescript | 7.0.2 |
 | @superset-ui/embedded-sdk | 0.4.0 |
+| echarts | 6.1.0 |
+| @fontsource-variable/inter | 5.3.0 |
 
 ## API details that shaped the design
 
@@ -91,6 +93,9 @@ Verified for later phases, and pinned when they start:
 - Line chart data can come back newest first.
 - `DATETRUNC(DATETIME('today'), month)` and `DATEADD(..., -12, month)` work in time ranges, for
   every grain.
+- Setting `THEME_DEFAULT` replaces Superset's tokens outright, so font weights and the like have to
+  be repeated. `EXTRA_CATEGORICAL_COLOR_SCHEMES` adds a palette charts can name in `color_scheme`.
+- `filter_bar_orientation: HORIZONTAL` in a dashboard's metadata puts its filters above the charts.
 - A chart's data endpoint (`GET /api/v1/chart/{id}/data/`) only works if the chart
   has a saved `query_context`, so Nova always stores one.
 - Creating a virtual dataset runs its SQL to read the columns. Bad SQL returns a

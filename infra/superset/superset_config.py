@@ -98,6 +98,49 @@ TALISMAN_CONFIG = {
     "session_cookie_secure": False,
 }
 
+# --- Look and feel -----------------------------------------------------------
+# The categorical palette is validated for colour blindness on Nova's surfaces, and is the
+# same one Nova's live previews use, so a chart looks the same when the dashboard takes over.
+EXTRA_CATEGORICAL_COLOR_SCHEMES = [{
+    "id": "novaColors",
+    "label": "Nova",
+    "description": "Validated for colour blindness; order matters",
+    "isDefault": True,
+    "colors": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
+}]
+
+# Setting a theme replaces Superset's defaults outright, so its other tokens are repeated here.
+_BRAND_TOKENS = {
+    "brandAppName": "Nova",
+    "brandLogoAlt": "Nova",
+    "brandLogoUrl": "/static/assets/images/superset-logo-horiz.png",
+    "brandLogoMargin": "18px 0",
+    "brandLogoHref": "/",
+    "brandLogoHeight": "24px",
+    "brandSpinnerUrl": None,
+    "brandSpinnerSvg": None,
+    "brandIconMaxWidth": 37,
+    "colorSuccess": "#16a34a",
+    "colorWarning": "#d97706",
+    "colorError": "#dc2626",
+    "colorInfo": "#2a78d6",
+    "fontUrls": [],
+    "fontFamily": "Inter, Helvetica, Arial, sans-serif",
+    "fontFamilyCode": "'IBM Plex Mono', 'Courier New', monospace",
+    "fontSizeXS": "8",
+    "fontSizeXXL": "28",
+    "fontWeightNormal": "400",
+    "fontWeightLight": "300",
+    "fontWeightStrong": "500",
+    "fontWeightBold": "700",
+    "transitionTiming": 0.3,
+    "colorEditorSelection": "#fff5cf",
+    "borderRadius": 8,
+}
+THEME_DEFAULT = {"token": {**_BRAND_TOKENS, "colorPrimary": "#4f46e5", "colorLink": "#4f46e5"}, "algorithm": "default"}
+THEME_DARK = {"token": {**_BRAND_TOKENS, "colorPrimary": "#818cf8", "colorLink": "#818cf8",
+                        "colorEditorSelection": "#5c4d1a"}, "algorithm": "dark"}
+
 # --- Timeouts ----------------------------------------------------------------
 # Trino queries over JDBC catalogs can outlast Superset's 60s defaults. Keep
 # GUNICORN_TIMEOUT in docker-compose.yml in step with these.

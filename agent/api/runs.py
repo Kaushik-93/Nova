@@ -100,7 +100,8 @@ class RunManager:
         where = "WHERE thread_id = %s" if thread_id else ""
         with self._pool.connection() as conn:
             cursor = conn.execute(
-                f"""SELECT run_id, thread_id, prompt, status, started_at, finished_at, result->>'title' AS title
+                f"""SELECT run_id, thread_id, prompt, status, started_at, finished_at, result->>'title' AS title,
+                           result->>'summary' AS summary
                     FROM runs {where} ORDER BY started_at DESC LIMIT %s""", (*([thread_id] if thread_id else []), limit))
             columns = [c.name for c in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]

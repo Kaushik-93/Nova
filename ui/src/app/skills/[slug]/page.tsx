@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 
-import { ErrorState, Loading } from "@/components/states";
+import { ErrorState, Loading, PageHeader } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,30 +21,28 @@ export default function SkillPage({ params }: { params: Promise<{ slug: string }
   if (!skill) return <Loading />;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
-      <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">{skill.name}</h1>
-        <Badge variant={skill.status === "reviewed" ? "success" : "warning"}>v{skill.version}, {skill.status}</Badge>
-        {skill.status === "draft" && (
-          <Button size="sm" className="ml-auto" onClick={() => api.approveSkill(slug).then(load).catch((cause) => setError(cause.message))}>
-            Approve these definitions
-          </Button>
-        )}
-      </div>
-      <p className="text-sm text-muted-foreground">{skill.description}</p>
+    <div className="mx-auto max-w-5xl space-y-4 p-8">
+      <PageHeader title={skill.name} description={skill.description}>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge variant={skill.status === "reviewed" ? "success" : "warning"}>v{skill.version}, {skill.status}</Badge>
+          {skill.status === "draft" && (
+            <Button size="sm" onClick={() => api.approveSkill(slug).then(load).catch((cause) => setError(cause.message))}>Approve definitions</Button>
+          )}
+        </div>
+      </PageHeader>
 
       <Card>
         <CardHeader><CardTitle>Metrics</CardTitle></CardHeader>
         <CardContent className="divide-y divide-border p-0">
           {Object.entries(skill.metrics).map(([key, metric]) => (
-            <details key={key} className="px-4 py-2">
-              <summary className="flex cursor-pointer items-center gap-2 text-sm">
+            <details key={key} className="px-5 py-2.5">
+              <summary className="flex cursor-pointer items-center gap-2 text-[13px] font-medium">
                 {metric.label}
                 {metric.unit && <span className="text-xs text-muted-foreground">{metric.unit}</span>}
                 <Badge className="ml-auto" variant={metric.status === "reviewed" ? "success" : "default"}>{metric.status}</Badge>
               </summary>
               {metric.description && <p className="mt-2 text-xs text-muted-foreground">{metric.description}</p>}
-              <pre className="mt-2 overflow-auto rounded bg-muted p-2 text-[11px]">{`${metric.sql}\nFROM ${metric.base}${metric.filters.length ? `\nWHERE ${metric.filters.join("\n  AND ")}` : ""}`}</pre>
+              <pre className="mt-2 overflow-auto rounded-lg bg-muted p-3 text-[11px] leading-relaxed">{`${metric.sql}\nFROM ${metric.base}${metric.filters.length ? `\nWHERE ${metric.filters.join("\n  AND ")}` : ""}`}</pre>
             </details>
           ))}
         </CardContent>

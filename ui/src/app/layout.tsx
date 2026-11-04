@@ -1,3 +1,5 @@
+import "@fontsource-variable/inter";
+
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
@@ -14,9 +16,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} /></head>
-      <body className="flex h-screen flex-col overflow-hidden">
+      <body className="flex h-screen overflow-hidden">
         <Nav />
-        <main className="min-h-0 flex-1 overflow-auto">{children}</main>
+        <main className="min-h-0 min-w-0 flex-1 overflow-auto">{children}</main>
       </body>
     </html>
   );

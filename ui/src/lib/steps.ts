@@ -10,6 +10,8 @@ export type Step = {
   running: boolean;
   failed: boolean;
   startedAt: string;
+  /** A finished "decided what to do next" step, which says nothing the next step doesn't. */
+  quiet?: boolean;
 };
 
 export type Stage = { key: string; agent: string; steps: Step[]; seconds: number; running: boolean };
@@ -87,6 +89,7 @@ export function toStages(events: RunEvent[]): Stage[] {
         if (event.tools?.length) {
           const names = [...new Set(event.tools.map(toolLabel))];
           step.label = `Decided: ${names.join(", ").toLowerCase()}${event.tools.length > names.length ? ` (${event.tools.length})` : ""}`;
+          step.quiet = !step.text;
         } else {
           step.label = "Reported back";
         }
@@ -127,4 +130,63 @@ export function currentStep(stages: Stage[]): { agent: string; step: Step } | nu
     if (step) return { agent: stage.agent, step };
   }
   return null;
+}
+
+export type MilestoneState = "pending" | "active" | "done";
+export type Milestone = { id: string; label: string; state: MilestoneState; seconds: number | null; note?: string };
+
+const MILESTONES = [
+  { id: "understand", label: "Understanding your data" },
+  { id: "plan", label: "Planning the dashboard" },
+  { id: "data", label: "Preparing the data" },
+  { id: "charts", label: "Building charts" },
+  { id: "verify", label: "Verifying the numbers" },
+  { id: "finish", label: "Final checks" },
+];
+const DELEGATED: Record<string, number> = { sql_author: 2, chart_designer: 3, verifier: 4 };
+
+/** The run as six plain stages, for people who don't want the raw steps. */
+export function toMilestones(events: RunEvent[], status: string | undefined, now: number): Milestone[] {
+  // Time is added up per stage, because a repair goes back to an earlier one.
+  const spent = MILESTONES.map(() => 0);
+  const visited = MILESTONES.map(() => false);
+  let current = 0;
+  let furthest = 0;
+  let enteredAt: number | null = null;
+  const moveTo = (index: number, at: number) => {
+    if (index === current) return;
+    spent[current] += at - (enteredAt ?? at);
+    current = index;
+    enteredAt = at;
+    furthest = Math.max(furthest, index);
+    visited[index] = true;
+  };
+
+  for (const event of events) {
+    const at = new Date(event.at).getTime();
+    if (enteredAt === null) { enteredAt = at; visited[0] = true; }
+    if (event.event === "plan") {
+      moveTo(1, at);
+    } else if (event.event === "tool_start" && event.tool === "task") {
+      const target = DELEGATED[(event.detail ?? "").split(":")[0]];
+      if (target !== undefined) moveTo(target, at);
+    } else if (event.event === "tool_start" && event.tool === "finish_dashboard") {
+      moveTo(5, at);
+    }
+  }
+
+  const complete = status === "finished";
+  const stopped = status !== undefined && status !== "running" && !complete;
+  const lastEvent = events.at(-1);
+  const end = (complete || stopped) && lastEvent ? new Date(lastEvent.at).getTime() : now;
+  if (enteredAt !== null) spent[current] += Math.max(end - enteredAt, 0);
+  const charts = new Set(events.filter((event) => event.event === "chart_ready").map((event) => event.key)).size;
+  const reworked = current < furthest;
+
+  return MILESTONES.map((milestone, index) => {
+    const state: MilestoneState = complete || index < current || (reworked && index <= furthest && index !== current)
+      ? "done" : index === current && !stopped ? "active" : "pending";
+    const note = index === 3 && charts ? `${charts} ready` : index === current && reworked && !complete ? "Fixing something the checks found" : undefined;
+    return { ...milestone, state, seconds: visited[index] ? spent[index] / 1000 : null, note };
+  });
 }

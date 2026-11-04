@@ -272,6 +272,15 @@ def test_a_time_filter_with_no_default_leaves_chart_ranges_alone():
     assert native["defaultDataMask"]["extraFormData"] == {}
 
 
+def test_filters_sit_in_a_row_above_the_charts():
+    assert build_json_metadata({}, [])["filter_bar_orientation"] == "HORIZONTAL"
+
+
+def test_charts_use_the_validated_palette():
+    assert build_form_data(chart(Viz.LINE), 1)["color_scheme"] == "novaColors"
+    assert build_json_metadata({}, [])["color_scheme"] == "novaColors"
+
+
 def test_json_metadata_carries_positions_so_superset_relinks_charts():
     positions = build_positions("t", [[ChartSlot(chart_id=1, title="A", width=12)]])
     metadata = build_json_metadata(positions, [build_native_filter(TimeFilter())])

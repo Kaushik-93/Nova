@@ -10,12 +10,13 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 from agent.harness.untrusted import wrap_untrusted
-from agent.harness.validators import check_dataset, last_point_warning, verify_dashboard
+from agent.harness.validators import (chart_dataset_id, chart_time_window, check_dataset, filters_missing_from,
+                                      last_point_warning, verify_dashboard)
 from agent.runtime import Runtime
 from agent.tools.renderer import render_dashboard, review_screenshot
 from agent.tools.sql_tools import NoInput, reporting_failures
-from agent.tools.superset_payloads import (CHART_KEY_PREFIX, ChartSlot, ChartSpec, SelectFilter, TimeFilter, fill_row,
-                                           rows_from_positions, wrap_row)
+from agent.tools.superset_payloads import (CHART_KEY_PREFIX, KPI_ROW_HEIGHT, KPI_TYPES, ChartSlot, ChartSpec, SelectFilter,
+                                           TimeFilter, fill_row, rows_from_positions, wrap_row)
 
 MAX_ROWS_SHOWN = 15
 DATASET_DATABASE = "Nova Trino"
@@ -114,7 +115,10 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
             for indexes in wrap_row([chart.viz_type for chart in charts]):
                 chosen = [row[index] for index in indexes]
                 widths = fill_row([slot.width for slot in chosen])
-                slots.append([ChartSlot(chart_id=slot.chart_id, width=width, height=slot.height,
+                # A row of headline numbers stays compact, whatever height was asked for.
+                only_kpis = all(charts[index].viz_type in KPI_TYPES for index in indexes)
+                slots.append([ChartSlot(chart_id=slot.chart_id, width=width,
+                                        height=KPI_ROW_HEIGHT if only_kpis else slot.height,
                                         title=titles.get(slot.chart_id) or charts[index].slice_name)
                               for index, slot, width in zip(indexes, chosen, widths)])
         return slots
@@ -147,6 +151,7 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         data = superset.chart_data(chart.id, force=True)
         if data.row_count == 0:
             return f"chart_id={chart.id} was created but returned no rows. Check its filters and time range."
+        runtime.emit("chart_ready", chart_id=chart.id, key=spec.key, title=spec.title, viz=spec.viz.value)
         return f"chart_id={chart.id}, {data.row_count} rows"
 
     def build_filters(filters: list[SelectFilterInput], time_filter: bool) -> list[SelectFilter | TimeFilter]:
@@ -159,6 +164,10 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         """Create the dashboard with its layout and filters. Create the charts first."""
         state.dashboard = superset.ensure_dashboard(slug=state.dashboard_key, title=title, rows=to_slots(rows),
                                                     filters=build_filters(filters or [], time_filter))
+        # Shown straight away, marked as still being checked, rather than after verification.
+        state.embed_uuid = superset.enable_embedding(state.dashboard.id, [runtime.settings.nova_ui_origin])
+        runtime.save_dashboard()
+        runtime.emit("dashboard_ready", slug=state.dashboard_key, title=title)
         return f"dashboard_id={state.dashboard.id}, {sum(len(row) for row in rows)} charts"
 
     @reporting_failures
@@ -197,7 +206,35 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
             return "FAILED: there's no dashboard yet; use superset_create_dashboard."
         state.dashboard = superset.ensure_dashboard(slug=state.dashboard_key, rows=to_slots(rows),
                                                     title=title or state.dashboard.dashboard_title)
+        runtime.emit("dashboard_updated", slug=state.dashboard_key)
         return f"dashboard_id={state.dashboard.id}, {sum(len(row) for row in rows)} charts"
+
+    @reporting_failures
+    def superset_inspect_dashboard() -> str:
+        """Show what chart data can't: each dashboard filter and which charts it reaches, the
+        time window each chart uses, and each dataset's SQL. Use this rather than reporting
+        that something couldn't be confirmed."""
+        if state.dashboard is None:
+            return "No dashboard has been built in this conversation yet."
+        metadata = json.loads(superset.dashboard_detail(state.dashboard.id).get("json_metadata") or "{}")
+        charts = superset.dashboard_charts(state.dashboard.id)
+        details = {chart.id: superset.chart_detail(chart.id) for chart in charts}
+        titles = {chart.id: chart.slice_name for chart in charts}
+        unreachable = filters_missing_from(superset, state.dashboard.id, details)
+        filters = []
+        for native in metadata.get("native_filter_configuration") or []:
+            column = ((native.get("targets") or [{}])[0].get("column") or {}).get("name")
+            label = f"{native['name']} ({column})"
+            filters.append({"name": native["name"], "type": native.get("filterType"), "column": column,
+                            "missing_from": [titles[chart_id] for chart_id, absent in unreachable.items()
+                                             if label in absent]})
+        return json.dumps({
+            "filters": filters,
+            "charts": [{"chart_id": chart_id, "title": titles[chart_id], "dataset_id": chart_dataset_id(detail),
+                        "time_window": chart_time_window(detail)} for chart_id, detail in details.items()],
+            "datasets": [{"key": key, "dataset_id": dataset_id, "sql": superset.get_dataset(dataset_id).sql}
+                         for key, dataset_id in existing_datasets().items()],
+        })
 
     @reporting_failures
     def superset_get_chart_data(chart_id: int) -> str:
@@ -265,6 +302,8 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         StructuredTool.from_function(func=superset_get_dashboard, name="superset_get_dashboard", args_schema=NoInput),
         StructuredTool.from_function(func=superset_update_dashboard, name="superset_update_dashboard",
                                      args_schema=UpdateDashboardInput),
+        StructuredTool.from_function(func=superset_inspect_dashboard, name="superset_inspect_dashboard",
+                                     args_schema=NoInput),
         StructuredTool.from_function(func=superset_get_chart_data, name="superset_get_chart_data",
                                      args_schema=ChartIdInput),
         StructuredTool.from_function(func=render_dashboard_screenshot, name="render_dashboard_screenshot", args_schema=NoInput),

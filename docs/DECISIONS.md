@@ -273,3 +273,31 @@ months labelled complete, and the dashboard would have gone stale. The verifier 
 because D-027 has it check the window the chart reports. So `ChartSpec` refuses dates unless
 `fixed_dates` says the user asked for them, and `finish_dashboard` refuses a window ending part
 way through its time grain, which is a check no agent's judgement is involved in.
+
+## D-041: A dashboard streams in three stages
+
+Three minutes of an empty panel feels longer than it is, and useful things exist long before the
+run ends. So the plan draws a skeleton of every chart, each finished chart fills its slot, and the
+real dashboard takes over as soon as it exists, marked "Checks running" until verification passes.
+
+Previews are drawn by Nova, with ECharts: it's what Superset draws these charts with, so the handover
+is close to invisible. Superset can't embed a single chart or update an open dashboard without a
+reload, which is why the preview exists at all.
+
+## D-042: Live events carry ids, not data
+
+`chart_ready` names a chart, and the page fetches its rows from `/api/charts/{id}/preview`. Run events
+are stored, so putting rows in them would quietly copy source data into Nova's own database, past
+any row-level security added later.
+
+## D-043: The dashboard is shown before it's verified, and says so
+
+Waiting for verification would hide a working dashboard for over a minute. The trade-off is that
+someone can see numbers a check later changes, so the header says "Checks running" until it passes,
+and the embed reloads if a repair changed anything.
+
+## D-044: One palette, one font, filters in a row
+
+Superset is themed with Nova's brand colour and uses a categorical palette validated for colour
+blindness on Nova's own surfaces, in both light and dark. Filters sit in a row above the charts,
+because they apply to everything below, and a side panel costs an embed a quarter of its width.

@@ -3,6 +3,8 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -15,38 +17,74 @@
   --color-destructive: var(--destructive);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --shadow-card: 0 1px 2px rgb(16 16 24 / 0.04), 0 1px 3px rgb(16 16 24 / 0.03);
+  --shadow-raised: 0 4px 16px rgb(16 16 24 / 0.06), 0 1px 3px rgb(16 16 24 / 0.05);
 }
 
 :root {
-  --background: #fafafa;
-  --foreground: #18181b;
+  color-scheme: light;
+  --background: #f6f6f7;
+  --foreground: #16161a;
   --card: #ffffff;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
-  --border: #e4e4e7;
+  --muted: #f1f1f3;
+  --muted-foreground: #6c6c78;
+  --border: #e5e5e9;
   --primary: #4f46e5;
   --primary-foreground: #ffffff;
-  --accent: #eef2ff;
+  --accent: #eeeeff;
   --destructive: #dc2626;
-  --success: #16a34a;
-  --warning: #d97706;
+  --success: #15803d;
+  --warning: #b45309;
+  --grid: #ececef;
+  --axis: #8a8a95;
+  /* Validated for colour blindness on this surface. The order matters: see the dataviz check. */
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
 }
 
 .dark {
-  --background: #09090b;
-  --foreground: #fafafa;
+  color-scheme: dark;
+  --background: #0d0d10;
+  --foreground: #f4f4f6;
   --card: #18181b;
-  --muted: #27272a;
-  --muted-foreground: #a1a1aa;
-  --border: #27272a;
+  --muted: #232327;
+  --muted-foreground: #a0a0ab;
+  --border: #2a2a2f;
   --primary: #818cf8;
-  --primary-foreground: #18181b;
-  --accent: #1e1b4b;
+  --primary-foreground: #14141a;
+  --accent: #23224a;
   --destructive: #f87171;
   --success: #4ade80;
   --warning: #fbbf24;
+  --grid: #2a2a2f;
+  --axis: #8a8a95;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
 }
 
 html, body { height: 100%; }
-body { background: var(--background); color: var(--foreground); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-iframe { width: 100%; height: 100%; border: 0; }
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss03";
+  -webkit-font-smoothing: antialiased;
+}
+iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.skeleton { position: relative; overflow: hidden; background: var(--muted); }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--card) 70%, transparent), transparent);
+  animation: shimmer 1.6s infinite;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise 0.35s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after, .rise { animation: none; }
+}

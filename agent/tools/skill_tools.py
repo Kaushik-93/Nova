@@ -38,7 +38,12 @@ def make_source_tools(runtime: Runtime) -> list[BaseTool]:
         candidates = [name]
         with contextlib.suppress(InvalidRequest):
             candidates.append(skill_slug(name))
-        return next((candidate for candidate in candidates if candidate in by_skill), None)
+        found = next((candidate for candidate in candidates if candidate in by_skill), None)
+        if found:
+            return found
+        # Subagents often guess, so one source in the plan settles which skill is meant.
+        planned = [source for source in (runtime.state.plan or {}).get("sources", []) if source in by_skill]
+        return planned[0] if len(planned) == 1 else None
 
     def unknown(name: str) -> str:
         return f"FAILED: no skill named {name!r}. Skills: {sorted(by_skill)}"
