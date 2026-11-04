@@ -10,4 +10,8 @@ dependencies = { file = ["requirements.txt"] }
 
 [tool.pytest.ini_options]
 testpaths = ["agent/tests"]
-markers = ["integration: needs the running stack"]
+markers = [
+    "integration: needs the running stack",
+    "llm: calls the real model and costs money; run with `make test-llm`",
+]
+addopts = "-m 'not llm'"

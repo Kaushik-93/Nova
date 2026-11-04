@@ -1,5 +1,10 @@
 deepagents==0.7.32
 httpx==0.28.1
+langchain==1.4.8
+langchain-anthropic==1.7.9
+langchain-openai==1.7.3
+langgraph==1.2.19
+langgraph-checkpoint-postgres==3.2.0
 psycopg[binary]==3.3.8
 psycopg-pool==3.3.3
 prison==0.2.1

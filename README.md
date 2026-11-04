@@ -4,8 +4,7 @@ A GenAI BI platform. Connect your data sources, and an AI agent learns them and 
 Apache Superset dashboards from a sentence or two.
 
 > **Status: in development.** Infrastructure, the Superset client, the SQL harness and
-> the profiler's measuring layer are complete. The LLM-driven agent and UI are still to
-> come.
+> profiling are complete. The dashboard agent, API and UI are still to come.
 
 ## Quickstart
 
@@ -23,7 +22,9 @@ seeds the demo data and waits for everything to be healthy.
 | Superset | http://localhost:18088 | `admin`, with the password from `.env` |
 | Trino | http://localhost:18080 | Any username |
 
-Run the tests with `make test`, and see every command with `make help`.
+Run the tests with `make test`, and see every command with `make help`. Tests that call
+the real model cost money, so they're separate: `make test-llm`. Set `MODEL_PROVIDER`,
+`MODEL_NAME` and the matching API key in `.env` first.
 
 `docker compose up` also works from the repo root once `.env` exists (`make env`).
 

@@ -28,6 +28,11 @@ registry, rather than from memory.
 | redis | 8.1.0 | tools |
 
 | deepagents | 0.7.32 | agent |
+| langchain | 1.4.8 | agent |
+| langchain-anthropic | 1.7.9 | agent |
+| langchain-openai | 1.7.3 | agent |
+| langgraph | 1.2.19 | agent |
+| langgraph-checkpoint-postgres | 3.2.0 | agent |
 | prison | 0.2.1 | agent |
 | psycopg-pool | 3.3.3 | agent |
 | python-json-logger | 4.2.0 | agent |
@@ -44,13 +49,6 @@ Verified for later phases, and pinned when they start:
 
 | Package | Version |
 |---|---|
-| langchain | 1.4.8 |
-| langchain-core | 1.7.4 |
-| langgraph | 1.2.19 |
-| langchain-anthropic | 1.7.9 |
-| anthropic | 2.4.0 |
-| langgraph-checkpoint-postgres | 3.2.0 |
-| langgraph-store-postgres | 0.1.0 |
 | fastapi | 0.162.0 |
 | uvicorn | 0.54.0 |
 | sse-starlette | 3.6.0 |
@@ -136,7 +134,13 @@ Verified for later phases, and pinned when they start:
   `/skills/_joins/` must be passed as a separate source.
 - Descriptions over 1,024 characters are truncated.
 
-**langchain-anthropic 1.7.9 with `claude-opus-5-5`**
+**langchain-openai 1.7.3 with `gpt-6-luna`** (tested live)
+- Needs the Responses API (`use_responses_api=True`).
+- `response_format` raises on a missing field and loses the run, which is one reason the
+  profiler submits through a tool (D-023).
+- `usage_metadata` is populated, so budgets count real tokens.
+
+**langchain-anthropic 1.7.9 with `claude-opus-5-5`** (from source, not tested live)
 - `temperature` and `thinking: disabled` are rejected. Lower effort with
   `reasoning_effort` instead.
 - Forced `tool_choice` returns a 400, so structured output must use

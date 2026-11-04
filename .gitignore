@@ -24,3 +24,7 @@ out/
 # Runtime output
 *.log
 artifacts/
+
+# Generated at runtime by connecting a source
+skills/*
+!skills/.gitkeep

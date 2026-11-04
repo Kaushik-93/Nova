@@ -237,6 +237,13 @@ services:
       TRINO_URL: ${TRINO_URL}
       DATABASE_URL: ${DATABASE_URL}
       DEMO_OWNER_PASSWORD: ${DEMO_OWNER_PASSWORD}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
+      MODEL_NAME: ${MODEL_NAME:-claude-opus-5-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      NOVA_SKILLS_DIR: /app/skills
+    volumes:
+      - ../skills:/app/skills
     depends_on:
       metadata-db:
         condition: service_healthy

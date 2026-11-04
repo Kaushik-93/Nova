@@ -2,10 +2,15 @@
 
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(protected_namespaces=())
+
+    model_provider: str = "anthropic"
+    model_name: str = "claude-opus-5-5"
+
     superset_url: str
     superset_admin_user: str
     superset_admin_password: str

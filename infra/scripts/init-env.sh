@@ -27,4 +27,4 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
 done <"$ROOT/.env.example"
 
-echo "created .env with generated secrets (set ANTHROPIC_API_KEY before Phase 4)"
+echo "created .env with generated secrets; set an LLM key before profiling"

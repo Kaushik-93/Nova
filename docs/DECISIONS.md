@@ -147,3 +147,28 @@ skill, even at low cardinality. Skills are shown to the model and shared across 
 `pip` searched for over seven minutes on an unsatisfiable pin rather than failing, where
 `uv` reported the conflict in half a second. The image now installs a generated
 `requirements.lock`, which also makes builds reproducible.
+
+## D-022: The LLM provider is configuration; testing uses OpenAI
+
+The prompt specifies Claude, which stays the default in `.env.example`. Testing uses
+`MODEL_PROVIDER=openai` and `MODEL_NAME=gpt-6-luna`, at the owner's request. Nothing
+outside `agent/llm.py` knows which provider is in use, and API keys aren't in `Settings`,
+so they can't reach a prompt or a log. The Claude path is written but not yet run live.
+
+## D-023: The profiler finishes by calling a tool
+
+`submit_skill` is an ordinary tool. A malformed submission becomes feedback rather than an
+exception that loses the run, verification happens inside it so repairs stay in the same
+conversation, and it needs no forced `tool_choice`, which Claude Opus 5.5 rejects.
+
+## D-024: The harness decides what is true in a skill
+
+The model proposes, but only metrics and examples the harness ran itself reach the skill.
+Text the model wrote can still echo hostile source content, so a generated skill stays
+`draft` until reviewed, and the rules that matter are enforced in code, which no skill
+text can change.
+
+## D-025: `make test` makes no paid calls
+
+Tests that call the real model are marked `llm` and run with `make test-llm`, so the normal
+suite is free and works with no key. Evals in Phase 9 need the same decision.
