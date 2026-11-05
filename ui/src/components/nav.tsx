@@ -1,23 +1,27 @@
 "use client";
 
-import { BookOpen, Database, LayoutDashboard, Sparkles } from "lucide-react";
+import { BookOpen, Database, LayoutDashboard, LogOut, Sparkles, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
-import { api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { api, type Role } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-const LINKS = [
-  { href: "/builder", label: "Build", icon: Sparkles },
-  { href: "/dashboards", label: "Dashboards", icon: LayoutDashboard },
-  { href: "/skills", label: "Skills", icon: BookOpen },
-  { href: "/sources", label: "Sources", icon: Database },
+const LINKS: { href: string; label: string; icon: typeof Sparkles; roles: Role[] }[] = [
+  { href: "/builder", label: "Build", icon: Sparkles, roles: ["admin", "analyst"] },
+  { href: "/dashboards", label: "Dashboards", icon: LayoutDashboard, roles: ["admin", "analyst", "viewer"] },
+  { href: "/skills", label: "Skills", icon: BookOpen, roles: ["admin"] },
+  { href: "/sources", label: "Sources", icon: Database, roles: ["admin"] },
+  { href: "/users", label: "People", icon: Users, roles: ["admin"] },
 ];
 
 export function Nav() {
   const path = usePathname();
+  const { user, signOut } = useAuth();
   const [model, setModel] = useState<string | null>(null);
   useEffect(() => { api.config().then((config) => setModel(config.model)).catch(() => undefined); }, []);
 
@@ -28,7 +32,7 @@ export function Nav() {
         <span className="text-[15px] font-semibold tracking-tight">Nova</span>
       </Link>
       <nav className="flex flex-1 flex-col gap-0.5 px-2.5 pt-1">
-        {LINKS.map(({ href, label, icon: Icon }) => {
+        {LINKS.filter((link) => link.roles.includes(user.role)).map(({ href, label, icon: Icon }) => {
           const active = path.startsWith(href);
           return (
             <Link key={href} href={href} aria-current={active ? "page" : undefined}
@@ -39,6 +43,13 @@ export function Nav() {
           );
         })}
       </nav>
+      <div className="flex items-center gap-1 border-t border-border px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-medium" title={user.email}>{user.display_name || user.email}</p>
+          <p className="text-[11px] capitalize text-muted-foreground">{user.role}</p>
+        </div>
+        <Button variant="ghost" size="icon" onClick={signOut} aria-label="Sign out" title="Sign out"><LogOut className="size-4" /></Button>
+      </div>
       <div className="flex items-center justify-between border-t border-border px-3 py-2.5">
         <span className="truncate text-[11px] text-muted-foreground" title="The model doing the work">{model}</span>
         <ThemeToggle />

@@ -33,3 +33,22 @@ passwords. Run `make reset`, then `make up`.
 `make seed` to bring it up to yesterday. Closed periods keep the same numbers.
 
 **A test left a schema change behind.** `make seed` drops and rebuilds both sources.
+
+**Nobody can sign in.** The first administrator is created from `NOVA_ADMIN_EMAIL` and
+`NOVA_ADMIN_PASSWORD` when the API starts. It's only created once, so changing `.env` afterwards
+doesn't change the password.
+
+**The API won't start, saying `NOVA_JWT_SECRET` is too short.** Run `make env`. It adds new settings
+to an existing `.env`, and never changes the ones already there.
+
+**SSO sends people back to the sign-in page.** The page says why. "Single sign-on didn't complete"
+usually means the redirect URI at the provider doesn't exactly match your `NOVA_PUBLIC_API_URL`
+followed by `/api/auth/sso/callback`, and the API log has the provider's reason. "An account already
+uses that email" means the provider didn't report the email as verified, so it wasn't linked.
+
+**A source shows as failed.** Press Retry on the Sources page to profile it again. If it failed
+before its Trino catalog was created, connect it again with the same name and its password.
+
+**Someone limited to a tenant sees chart errors.** Each dataset on a multi-tenant source must output
+the tenant column. That's only enforced for dashboards built after tenancy was turned on, so
+rebuild the dashboard.

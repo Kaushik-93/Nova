@@ -10,6 +10,7 @@ registry, rather than from memory.
 |---|---|---|
 | Apache Superset | `apache/superset:6.1.0` | Latest stable. 7.0.0 is at rc2. Extended by `infra/superset/Dockerfile`. |
 | Trino | `trinodb/trino:484` | Java 25. |
+| Dex | `ghcr.io/dexidp/dex:v2.46.1` | A real OpenID Connect provider, used only by the tests. |
 | Postgres | `postgres:17.11-alpine` | Metadata and demo source. |
 | Redis | `redis:8.8.4-alpine` | |
 | MySQL | `mysql:8.4.13` | LTS line; demo source. |
@@ -167,3 +168,15 @@ Verified for later phases, and pinned when they start:
   `setThemeMode('dark' | 'default' | 'system')` on the returned object.
 - With `dashboardUiConfig.emitDataMasks: true`, `observeDataMask` reports filter selections to
   the host page, keyed by native filter id.
+
+## Sign-in and security
+
+Added on 2026-11-05, and checked the same way.
+
+| Package | Version | Used for |
+|---|---|---|
+| argon2-cffi | 25.1.0 | Password hashing |
+| pyjwt | 2.15.1 | Session tokens |
+| authlib | 1.9.4 | OpenID Connect. `code_challenge_method: S256` turns on PKCE |
+| itsdangerous | 2.2.0 | The session cookie that holds the SSO state and nonce |
+| cryptography | 50.0.2 | Fernet encryption of source credentials |

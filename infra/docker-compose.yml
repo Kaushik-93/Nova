@@ -25,6 +25,21 @@ x-agent-env: &agent-env
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   NOVA_SKILLS_DIR: /app/skills
+  NOVA_PUBLIC_API_URL: ${NOVA_PUBLIC_API_URL}
+  NOVA_JWT_SECRET: ${NOVA_JWT_SECRET}
+  NOVA_ADMIN_EMAIL: ${NOVA_ADMIN_EMAIL}
+  NOVA_ADMIN_PASSWORD: ${NOVA_ADMIN_PASSWORD}
+  FERNET_KEY: ${FERNET_KEY}
+  DEMO_RO_PASSWORD: ${DEMO_RO_PASSWORD}
+
+x-oidc-env: &oidc-env
+  OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+  OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+  OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-SSO}
+  OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
+  OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
+  OIDC_ADMIN_EMAILS: ${OIDC_ADMIN_EMAILS:-}
 
 x-tools-image: &tools-image
   image: nova-tools:dev
@@ -246,8 +261,18 @@ services:
     environment:
       <<: *agent-env
       DEMO_OWNER_PASSWORD: ${DEMO_OWNER_PASSWORD}
+      NOVA_ADMIN_EMAIL: test-admin@nova.local
+      NOVA_ADMIN_PASSWORD: test-admin-password
+      # A real OpenID Connect provider, so the SSO tests exercise the whole protocol.
+      OIDC_DISCOVERY_URL: http://dex:5556/dex/.well-known/openid-configuration
+      OIDC_CLIENT_ID: nova-test
+      OIDC_CLIENT_SECRET: not-a-secret-test-only
+      OIDC_PROVIDER_NAME: Test SSO
+      OIDC_ALLOWED_DOMAINS: nova.test
+      OIDC_ADMIN_EMAILS: sso-admin@nova.test
     volumes:
       - ../skills:/app/skills
+      - trino-data:/trino-data
     depends_on:
       metadata-db:
         condition: service_healthy
@@ -255,6 +280,21 @@ services:
         condition: service_healthy
       trino:
         condition: service_healthy
+      dex:
+        condition: service_healthy
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.46.1
+    profiles: ["test"]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex/config.yaml:/etc/dex/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5556/dex/.well-known/openid-configuration"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    mem_limit: 128m
 
   # --- Nova ---------------------------------------------------------------------
   agent:
@@ -262,9 +302,12 @@ services:
     build:
       context: ../agent
     command: ["uvicorn", "agent.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
-    environment: *agent-env
+    environment:
+      <<: [*agent-env, *oidc-env]
     volumes:
       - ../skills:/app/skills
+      # Trino reads the credentials of connected sources from here.
+      - trino-data:/trino-data
     ports:
       - "127.0.0.1:${API_HOST_PORT:-18000}:8000"
     depends_on:

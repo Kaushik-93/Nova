@@ -29,6 +29,7 @@ class DatasetCheck(BaseModel):
     sql: str
     rows: int
     columns: list[str]
+    tables: list[str] = []
 
 
 class ChartCheck(BaseModel):
@@ -40,7 +41,7 @@ class ChartCheck(BaseModel):
 
 
 def check_dataset(sql: str, *, grain: list[str], executor: SqlExecutor, policy: SqlPolicy, context: RunContext,
-                  budget: RunBudget) -> DatasetCheck:
+                  budget: RunBudget, tenant_columns: dict[str, str] | None = None) -> DatasetCheck:
     """Validate SQL before it becomes a dataset, and measure what could go wrong.
 
     A join that multiplies rows still returns plausible-looking numbers, so `grain` must
@@ -58,6 +59,11 @@ def check_dataset(sql: str, *, grain: list[str], executor: SqlExecutor, policy: 
     missing = [column for column in grain if column not in preview.columns]
     if missing:
         raise QueryFailure(f"grain columns {missing} aren't in the query's output: {preview.columns}")
+    for table in guarded.tables:
+        required = (tenant_columns or {}).get(table.split(".")[0])
+        if required and required not in preview.columns:
+            raise QueryFailure(f"this source is multi-tenant, so every dataset must output its `{required}` column. "
+                               "Without it the dashboard couldn't be limited to one tenant.")
     columns = ", ".join(f'"{column}"' for column in grain)
     total, unique = executor.run(
         f'SELECT COUNT(*), COUNT(DISTINCT ROW({columns})) FROM ({guarded.sql}) AS d',
@@ -65,7 +71,7 @@ def check_dataset(sql: str, *, grain: list[str], executor: SqlExecutor, policy: 
     if total != unique:
         raise QueryFailure(f"the join multiplies rows: {total:,} rows but only {unique:,} distinct values of {grain}. "
                            "Sums over this dataset would be too high. Fix the join or declare the real grain.")
-    return DatasetCheck(sql=guarded.sql, rows=total, columns=preview.columns)
+    return DatasetCheck(sql=guarded.sql, rows=total, columns=preview.columns, tables=list(guarded.tables))
 
 
 def last_point_warning(data: ChartData, spec: ChartSpec) -> str | None:

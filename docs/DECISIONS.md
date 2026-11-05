@@ -301,3 +301,72 @@ and the embed reloads if a repair changed anything.
 Superset is themed with Nova's brand colour and uses a categorical palette validated for colour
 blindness on Nova's own surfaces, in both light and dark. Filters sit in a row above the charts,
 because they apply to everything below, and a side panel costs an embed a quarter of its width.
+
+## D-045: Sessions are a signed cookie, and the user is read on every request
+
+A session is a JWT in an HttpOnly, SameSite=Lax cookie, so page scripts can't read it and other
+sites can't send it. It holds only the user's id. Role and status are read from the database on
+each request, so disabling someone or changing their role applies at once. A signing secret shorter
+than 32 characters stops startup, because an empty one would let anyone forge a session.
+
+## D-046: SSO is OpenID Connect only
+
+OIDC with PKCE covers Okta, Entra ID, Google, Auth0 and Keycloak, and needs no XML signature
+handling. SAML isn't supported. A new SSO user is a viewer with no access, because being known to
+the identity provider says who someone is, not what they may read.
+
+## D-047: An email from SSO counts only if the provider says it verified it
+
+Without `email_verified: true`, an email can't link to an existing account or match
+`OIDC_ADMIN_EMAILS`. Otherwise anyone who can set their own email at the provider could take over
+an account. Providers that leave the claim out still work: those people sign in as new viewers,
+and an administrator promotes them.
+
+## D-048: One grant, enforced in two places
+
+Rows are limited by the same grant in the SQL guard, for the agent, and in the guest token, for
+dashboards. Both use `scope_clause`, so they can't drift apart. The guest rule names no dataset,
+which makes Superset apply it to all of them, and a dataset without the column errors instead of
+showing everything. A dashboard over sources with different tenant columns is refused.
+
+## D-049: For someone limited to tenants, tables without the column are refused
+
+A table can't be limited if it doesn't hold the column, so it's refused unless an administrator
+marks it as shared, as exchange rates are. The cost is that `invoice_lines`, which reaches its
+tenant only through `invoices`, is unavailable to them. Rewriting joins to reach a tenant through
+another table would be easy to get subtly wrong, and this is a security boundary.
+
+## D-050: Each run's agent gets its own view of the skills
+
+The agent's file tools read skills directly and aren't subject to the SQL guard. So a non-admin run
+gets a temporary folder holding only the skills it's granted, and someone limited to tenants doesn't
+get `schema.json`, whose measured values come from every tenant's rows. `load_skill` doesn't need it.
+The profiler is told not to name tenants in a skill, but that's an instruction to a model, not a
+guarantee, so read a multi-tenant source's skill before approving it.
+
+## D-051: Only administrators share dashboards
+
+Sharing decides what other people can see. A dashboard's datasets aren't limited by who built them
+unless the builder was, so an analyst with a whole source could otherwise show it to someone with
+less. Shared dashboards are hidden from anyone who can't read every source behind them.
+
+## D-052: A limit that can't be applied means no access
+
+If tenancy is removed from a source, a grant limited to some tenants stops working instead of
+widening to the whole source. Sources only reach the agent once they're `ready`, and a dashboard
+with no record of its sources can't be shown to a non-admin or shared.
+
+## D-053: Tenancy is confirmed by a person
+
+Nova suggests a tenant column from the profile but never applies it, because a wrong guess is a leak.
+
+## D-054: Credentials go in a file, not in CREATE CATALOG
+
+Trino keeps statement text in its logs and web UI, so `CREATE CATALOG` only names a credentials file
+on the `trino-data` volume, readable only by Trino's user. A copy is kept encrypted with Fernet.
+Superset holds its own copy, encrypted with its secret key, because `/api/v1/database/` requires one.
+
+## D-055: Who belongs to which tenant lives in Nova, for now
+
+An administrator sets it on the People page. Reading it from an identity provider claim would need
+to know how that provider names tenants, so it waits for a real provider's configuration.

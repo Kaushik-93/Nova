@@ -9,6 +9,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
+from agent.harness.errors import PermissionFailure
 from agent.harness.untrusted import wrap_untrusted
 from agent.harness.validators import (chart_dataset_id, chart_time_window, check_dataset, filters_missing_from,
                                       last_point_warning, verify_dashboard)
@@ -79,6 +80,17 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
     def dataset_prefix() -> str:
         return f"{state.dashboard_key}__"
 
+    def require_own_dataset(dataset_id: int) -> None:
+        """The agent reaches Superset as an admin, so ids from the model are checked. Without
+        this a user could point a chart at someone else's dataset and read it."""
+        if not superset.get_dataset(dataset_id).table_name.startswith(dataset_prefix()):
+            raise PermissionFailure(f"dataset {dataset_id} doesn't belong to this dashboard")
+
+    def require_own_chart(chart_id: int) -> None:
+        dataset_id = chart_dataset_id(superset.chart_detail(chart_id))
+        if dataset_id is None or not superset.get_dataset(dataset_id).table_name.startswith(dataset_prefix()):
+            raise PermissionFailure(f"chart {chart_id} doesn't belong to this dashboard")
+
     def existing_datasets() -> dict[str, int]:
         return {d.table_name.removeprefix(dataset_prefix()): d.id for d in superset.datasets_named(dataset_prefix())}
 
@@ -132,7 +144,8 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         if key not in existing and len(existing) >= MAX_DATASETS:
             return f"FAILED: this dashboard already has {len(existing)} datasets. Update one of: {sorted(existing)}"
         checked = check_dataset(sql, grain=grain, executor=runtime.executor, policy=runtime.policy,
-                                context=runtime.context, budget=runtime.budget)
+                                context=runtime.context, budget=runtime.budget, tenant_columns=runtime.tenant_columns)
+        state.catalogs.update(table.split(".")[0] for table in checked.tables)
         name = f"{state.dashboard_key}__{key}"
         dataset = superset.ensure_dataset(key=f"{state.dashboard_key}/{key}", name=name, sql=checked.sql,
                                           database_id=database_id())
@@ -143,6 +156,7 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
     def superset_create_chart(dataset_id: int, spec: ChartSpec) -> str:
         """Create or update a chart. Use a stable `key`: the same key updates the same
         chart. Trends stop at the last complete period automatically."""
+        require_own_dataset(dataset_id)
         existing = existing_charts()
         if spec.key not in {key for key, _, _ in existing.values()} and len(existing) >= MAX_CHARTS:
             return f"FAILED: this dashboard already has {len(existing)} charts. Reuse their keys."
@@ -162,6 +176,11 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
     def superset_create_dashboard(title: str, rows: list[list[Slot]], filters: list[SelectFilterInput] | None = None,
                                   time_filter: bool = True) -> str:
         """Create the dashboard with its layout and filters. Create the charts first."""
+        for row in rows:
+            for slot in row:
+                require_own_chart(slot.chart_id)
+        for item in filters or []:
+            require_own_dataset(item.dataset_id)
         state.dashboard = superset.ensure_dashboard(slug=state.dashboard_key, title=title, rows=to_slots(rows),
                                                     filters=build_filters(filters or [], time_filter))
         # Shown straight away, marked as still being checked, rather than after verification.
@@ -204,6 +223,9 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         complete layout: charts left out are removed from the dashboard."""
         if state.dashboard is None:
             return "FAILED: there's no dashboard yet; use superset_create_dashboard."
+        for row in rows:
+            for slot in row:
+                require_own_chart(slot.chart_id)
         state.dashboard = superset.ensure_dashboard(slug=state.dashboard_key, rows=to_slots(rows),
                                                     title=title or state.dashboard.dashboard_title)
         runtime.emit("dashboard_updated", slug=state.dashboard_key)
@@ -240,6 +262,7 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
     def superset_get_chart_data(chart_id: int) -> str:
         """Run a chart's saved query and show the result, with the exact time window it
         covers: start included, end excluded."""
+        require_own_chart(chart_id)
         data = superset.chart_data(chart_id, force=True)
         spec = state.charts.get(chart_id)
         warning = last_point_warning(data, spec) if spec else None

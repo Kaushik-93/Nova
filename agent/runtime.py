@@ -3,6 +3,7 @@ connection, credential or user id, and can't name a different user or catalog.""
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,6 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from psycopg_pool import ConnectionPool
 
 from agent.config import Settings
+from agent.harness.access import UserAccess, build_policy, make_skills_view
 from agent.harness.audit import AuditKind, AuditLog, AuditStatus, RunContext
 from agent.harness.budgets import BudgetLimits, RunBudget
 from agent.harness.executor import CostLimits, SqlExecutor
@@ -29,6 +31,7 @@ class BuildState:
     dashboard_key: str
     thread_id: str = ""
     dashboard: Dashboard | None = None
+    catalogs: set[str] = field(default_factory=set)
     charts: dict[int, ChartSpec] = field(default_factory=dict)
     datasets: dict[str, int] = field(default_factory=dict)
     plan: dict[str, Any] | None = None
@@ -56,9 +59,19 @@ class Runtime:
     sources: list[Source]
     state: BuildState
     sink: EventSink | None = None
+    access: UserAccess | None = None
+    skills_view: str | None = None  # this user's own view of the skills; see make_skills_view
+
+    @property
+    def tenant_columns(self) -> dict[str, str]:
+        """Every dataset on a multi-tenant source has to carry its tenant column, whoever builds
+        it, or the dashboard couldn't later be limited to one tenant."""
+        return {source.trino_catalog: source.tenant_column for source in self.sources if source.tenant_column}
 
     def close(self) -> None:
         self.superset.close()
+        if self.skills_view:
+            shutil.rmtree(self.skills_view, ignore_errors=True)
 
     def emit(self, event: str, **fields: Any) -> None:
         """Tell the live view something happened. Only ids and labels go here: a chart's data
@@ -71,34 +84,40 @@ class Runtime:
         state = self.state
         with self.pool.connection() as conn:
             conn.execute(
-                """INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, summary, created_by)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, summary, created_by, catalogs)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (slug) DO UPDATE SET embed_uuid = EXCLUDED.embed_uuid, title = EXCLUDED.title,
-                       summary = COALESCE(NULLIF(EXCLUDED.summary, ''), dashboards.summary), updated_at = now()""",
+                       summary = COALESCE(NULLIF(EXCLUDED.summary, ''), dashboards.summary), updated_at = now(),
+                       catalogs = ARRAY(SELECT DISTINCT unnest(dashboards.catalogs || EXCLUDED.catalogs))""",
                 (state.dashboard_key, state.thread_id, state.dashboard.id, state.embed_uuid,
-                 state.dashboard.dashboard_title, state.summary, self.context.user_id))
+                 state.dashboard.dashboard_title, state.summary, self.context.user_id, sorted(state.catalogs)))
 
 
 def make_runtime(settings: Settings, pool: ConnectionPool, model: BaseChatModel, *, context: RunContext,
-                 dashboard_key: str, thread_id: str = "", sink: EventSink | None = None) -> Runtime:
+                 dashboard_key: str, thread_id: str = "", sink: EventSink | None = None,
+                 access: UserAccess | None = None) -> Runtime:
+    """`access=None` is the command line and tests. The API always passes the user's access."""
     audit = AuditLog(pool)
+    store = SkillStore(settings.nova_skills_dir, pool)
 
     def audit_write(method: str, path: str, status: int) -> None:
         outcome = AuditStatus.OK if 0 < status < 400 else AuditStatus.FAILED
         audit.record(context, AuditKind.SUPERSET_WRITE, outcome, target=f"{method} {path}", detail={"status": status})
 
-    sources = list_sources(pool)
+    sources = [source for source in list_sources(pool) if source.status == "ready"]
+    visible = [source for source in sources if access is None or access.can_read(source)]
     return Runtime(
-        settings=settings, pool=pool, model=model, audit=audit, context=context, sources=sources, sink=sink,
+        settings=settings, pool=pool, model=model, audit=audit, context=context, sources=visible, sink=sink, access=access,
+        skills_view=make_skills_view(visible, access, settings.nova_skills_dir),
         executor=SqlExecutor(settings.trino_url, audit, timeout_seconds=settings.nova_query_timeout_seconds,
                              cost_limits=CostLimits(max_estimated_rows=settings.nova_max_estimated_rows,
                                                     max_estimated_bytes=settings.nova_max_estimated_bytes)),
         superset=SupersetClient(settings.superset_url, settings.superset_admin_user, settings.superset_admin_password,
                                 on_write=audit_write),
-        store=SkillStore(settings.nova_skills_dir, pool),
+        store=store,
         budget=RunBudget(BudgetLimits(max_steps=settings.nova_max_steps, max_tokens=settings.nova_max_tokens,
                                       max_wall_seconds=settings.nova_max_wall_seconds,
                                       max_sql_queries=settings.nova_max_sql_queries)),
-        policy=SqlPolicy(allowed_catalogs=frozenset(s.trino_catalog for s in sources), max_rows=1000),
+        policy=build_policy(visible, access, store),
         state=BuildState(dashboard_key=dashboard_key, thread_id=thread_id),
     )

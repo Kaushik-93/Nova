@@ -72,3 +72,41 @@ CREATE TABLE IF NOT EXISTS run_events (
 );
 
 CREATE INDEX IF NOT EXISTS run_events_run_idx ON run_events (run_id, id);
+
+CREATE TABLE IF NOT EXISTS users (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    email         text NOT NULL UNIQUE,
+    display_name  text NOT NULL DEFAULT '',
+    password_hash text,
+    role          text NOT NULL CHECK (role IN ('admin', 'analyst', 'viewer')),
+    sso_subject   text UNIQUE,
+    is_active     boolean NOT NULL DEFAULT true,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    last_login_at timestamptz
+);
+
+-- What a non-admin may read. No row means no access. tenant_ids NULL means the whole source.
+CREATE TABLE IF NOT EXISTS source_access (
+    user_id    uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+    source_id  uuid NOT NULL REFERENCES sources ON DELETE CASCADE,
+    tenant_ids text[],
+    PRIMARY KEY (user_id, source_id)
+);
+
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'postgres';
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'ready';
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS read_only boolean;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS encrypted_credentials text;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS superset_database_id integer;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS tenant_column text;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS tenant_table text;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS tenant_label_column text;
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS shared_tables text[] NOT NULL DEFAULT '{}';
+
+UPDATE sources SET kind = 'mysql' WHERE dialect = 'mysql' AND kind = 'postgres';
+
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS shared boolean NOT NULL DEFAULT false;
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS catalogs text[] NOT NULL DEFAULT '{}';
+
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'dashboard';
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS dashboard_key text;

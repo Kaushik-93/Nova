@@ -1,5 +1,9 @@
 """SQL guardrails. Everything the agent runs passes through `guard` first.
 
+Per-tenant access is enforced here too. For a scoped user every table is replaced by a
+subquery holding only their rows, so nothing the agent writes can reach anyone else's, and a
+table with no way to scope it is refused rather than shown.
+
 This is an allowlist, and it fails closed: a query is accepted only if it is fully
 understood to be one read-only SELECT over fully qualified tables in connected
 catalogs. Anything else is refused, including anything the parser can't make sense
@@ -17,6 +21,7 @@ Two parser behaviours matter here, both checked against sqlglot 30.29:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import sqlglot
@@ -35,6 +40,7 @@ SYSTEM_SCHEMAS = frozenset({"information_schema", "pg_catalog", "pg_toast", "mys
                             "system", "metadata", "runtime", "jdbc"})
 SYSTEM_CATALOGS = frozenset({"system", "jmx", "memory"})
 
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 ALLOWED_ROOTS = (exp.Select, exp.SetOperation)
 FORBIDDEN_NODES = (exp.DML, exp.DDL, exp.Command, exp.Into, exp.Lock, exp.Set, exp.Use, exp.Transaction, exp.Commit,
                    exp.Rollback, exp.Grant, exp.Copy, exp.Drop, exp.Alter, exp.TruncateTable)
@@ -47,6 +53,18 @@ FORBIDDEN_FUNCTIONS = frozenset({"pg_sleep", "pg_sleep_for", "pg_sleep_until", "
                                  "sys_exec", "sys_eval", "xp_cmdshell", "query_to_xml"})
 
 
+class RowScope(BaseModel):
+    """Which rows of one catalog a user may read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    column: str
+    values: tuple[str, ...]
+    numeric: bool = False
+    scoped_tables: frozenset[str] = frozenset()  # "catalog.schema.table" holding the column
+    shared_tables: frozenset[str] = frozenset()  # readable by everyone, such as exchange rates
+
+
 class SqlPolicy(BaseModel):
     """What one run may touch. Built server-side from the connected sources."""
 
@@ -55,6 +73,7 @@ class SqlPolicy(BaseModel):
     allowed_catalogs: frozenset[str]
     allowed_system_tables: frozenset[str] = frozenset()  # "catalog.schema.table"
     max_rows: int = DEFAULT_MAX_ROWS
+    row_scopes: dict[str, RowScope] = {}  # by catalog
 
 
 @dataclass(frozen=True)
@@ -62,6 +81,23 @@ class GuardedQuery:
     sql: str
     tables: tuple[str, ...]
     limit: int
+
+
+def scope_clause(column: str, values: tuple[str, ...] | list[str], *, numeric: bool) -> str:
+    """A WHERE condition for a row scope, shared by the SQL rewrite and Superset guest tokens.
+
+    The column comes from an admin and the values from the database, but this text goes into
+    SQL, so neither is trusted: the identifier must be plain, numbers must be numbers, and
+    strings are quoted. An empty scope matches nothing."""
+    if not IDENTIFIER.fullmatch(column):
+        raise SqlRejected(f"{column!r} isn't a usable column name")
+    if not values:
+        return "1 = 0"
+    if numeric:
+        literals = [str(int(value)) for value in values]
+    else:
+        literals = ["'" + str(value).replace("'", "''") + "'" for value in values]
+    return f"{column} IN ({', '.join(literals)})"
 
 
 def guard(sql: str, policy: SqlPolicy, *, dialect: str = TRINO, add_limit: bool = True) -> GuardedQuery:
@@ -81,6 +117,7 @@ def guard(sql: str, policy: SqlPolicy, *, dialect: str = TRINO, add_limit: bool 
     _reject_forbidden_nodes(tree)
     _reject_forbidden_functions(tree)
     tables = _check_tables(tree, policy)
+    _apply_row_scopes(tree, policy)
     limit = _apply_limit(tree, policy.max_rows) if add_limit else 0
     return GuardedQuery(sql=tree.sql(dialect=TRINO, comments=False), tables=tables, limit=limit)
 
@@ -156,6 +193,32 @@ def _check_tables(tree: exp.Expression, policy: SqlPolicy) -> tuple[str, ...]:
         if qualified not in seen:
             seen.append(qualified)
     return tuple(seen)
+
+
+def _apply_row_scopes(tree: exp.Expression, policy: SqlPolicy) -> None:
+    """Replace each scoped table with a subquery of the rows this user may read. Every table is
+    rewritten where it appears, so it holds in joins, CTEs, subqueries and unions alike, and
+    however the model writes its own WHERE clause, since an OR can't reach inside a subquery."""
+    if not policy.row_scopes:
+        return
+    ctes = _cte_names(tree)
+    for table in list(tree.find_all(exp.Table)):
+        name, schema, catalog = table.name.lower(), table.db.lower(), table.catalog.lower()
+        if not schema and not catalog and name in ctes:
+            continue
+        scope = policy.row_scopes.get(catalog)
+        if scope is None:
+            continue
+        qualified = f"{catalog}.{schema}.{name}"
+        if qualified in {t.lower() for t in scope.shared_tables}:
+            continue
+        if qualified not in {t.lower() for t in scope.scoped_tables}:
+            raise SqlRejected(f"table {qualified} can't be limited to your data, so it isn't available to you")
+        alias = table.alias or table.name
+        source = table.copy()
+        source.set("alias", None)
+        condition = sqlglot.parse_one(scope_clause(scope.column, scope.values, numeric=scope.numeric), read=TRINO)
+        table.replace(exp.select(exp.Star()).from_(source).where(condition).subquery(alias=alias, copy=False))
 
 
 def _apply_limit(tree: exp.Expression, max_rows: int) -> int:

@@ -34,7 +34,7 @@ from agent.harness.errors import ErrorCategory, NovaError, QueryFailure
 from agent.harness.executor import SqlExecutor
 from agent.harness.guardrails import SqlPolicy
 from agent.harness.logs import configure_logging
-from agent.harness.middleware import RunMiddleware
+from agent.harness.middleware import EventSink, RunMiddleware
 from agent.harness.untrusted import wrap_untrusted
 from agent.llm import build_model
 from agent.tools.profiler import Profiler, SourceProfile, TableProfile
@@ -213,9 +213,10 @@ def make_submit_skill(submission: Submission, *, executor: SqlExecutor, policy: 
     return StructuredTool.from_function(func=submit_skill, name="submit_skill", args_schema=SkillDraft)
 
 
-def build_agent(model: BaseChatModel, *, tools: list[BaseTool], budget: RunBudget):
+def build_agent(model: BaseChatModel, *, tools: list[BaseTool], budget: RunBudget, run_id: str = "",
+                sink: EventSink | None = None):
     return create_deep_agent(model=model, tools=tools, system_prompt=PROMPT.read_text(),
-                             middleware=[RunMiddleware(budget, agent="profiler")])
+                             middleware=[RunMiddleware(budget, agent="profiler", run_id=run_id, sink=sink)])
 
 
 def task_message(profile: SourceProfile) -> str:
@@ -230,11 +231,11 @@ def repair_message(report: VerificationReport) -> str:
 
 
 def draft_skill(model: BaseChatModel, profile: SourceProfile, *, executor: SqlExecutor, context: RunContext,
-                budget: RunBudget) -> tuple[SkillDraft, VerificationReport]:
+                budget: RunBudget, sink: EventSink | None = None) -> tuple[SkillDraft, VerificationReport]:
     """Run the agent until it has submitted a skill the harness has checked."""
     policy = SqlPolicy(allowed_catalogs=frozenset({profile.catalog}), max_rows=1000)
     submission = Submission()
-    agent = build_agent(model, budget=budget, tools=[
+    agent = build_agent(model, budget=budget, run_id=context.run_id, sink=sink, tools=[
         make_run_readonly_sql(executor, policy=policy, context=context, budget=budget),
         make_submit_skill(submission, executor=executor, policy=policy, context=context, budget=budget),
     ])
@@ -266,10 +267,15 @@ def to_examples_sql(report: VerificationReport) -> str:
 
 
 def generate_skill(*, model: BaseChatModel, store: SkillStore, executor: SqlExecutor, source_id: str, slug: str,
-                   catalog: str, dialect: str, context: RunContext, budget: RunBudget) -> SkillFrontmatter:
+                   catalog: str, dialect: str, context: RunContext, budget: RunBudget,
+                   sink: EventSink | None = None) -> SkillFrontmatter:
     """Measure a source, have the subagent interpret it, and write the verified skill."""
-    profile = Profiler(executor, context=context, budget=budget).profile(slug, catalog, dialect)
-    draft, report = draft_skill(model, profile, executor=executor, context=context, budget=budget)
+    def on_table(table: str, done: int, total: int) -> None:
+        if sink:
+            sink({"event": "profile_table", "agent": "profiler", "table": table, "done": done, "total": total})
+
+    profile = Profiler(executor, context=context, budget=budget, on_table=on_table).profile(slug, catalog, dialect)
+    draft, report = draft_skill(model, profile, executor=executor, context=context, budget=budget, sink=sink)
     change = [f"Profiled {len(profile.tables)} tables. {len(report.metric_values)} metrics and "
               f"{len(report.verified_examples)} examples verified by running them."]
     change += [f"- Dropped {failure.item}: {failure.reason}" for failure in report.failures]

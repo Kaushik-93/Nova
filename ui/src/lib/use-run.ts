@@ -23,7 +23,7 @@ export function useRun(runId: string | null) {
     refresh();
     const timer = setInterval(() => { if (!finished) refresh(); }, REFRESH_MS);
 
-    const source = new EventSource(`${API_URL}/api/runs/${runId}/events`);
+    const source = new EventSource(`${API_URL}/api/runs/${runId}/events`, { withCredentials: true });
     source.addEventListener("step", (message) => {
       const event = JSON.parse((message as MessageEvent).data) as RunEvent;
       setEvents((current) => (current.some((e) => e.id === event.id) ? current : [...current, event]));

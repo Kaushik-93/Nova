@@ -199,6 +199,21 @@ class SupersetClient:
             raise NotFound(f"no Superset database named {name!r}")
         return match["id"]
 
+    def ensure_database(self, name: str, uri: str) -> int:
+        """Register or update a database. Superset encrypts the URI, and tests it when saving."""
+        def run() -> int:
+            existing = self._find_one("database", "database_name", name)
+            body = {"sqlalchemy_uri": uri, "expose_in_sqllab": True, "allow_dml": False, "allow_ctas": False}
+            if existing:
+                self._call("PUT", f"/api/v1/database/{existing['id']}", json=body)
+                return existing["id"]
+            return self._call("POST", "/api/v1/database/", json={"database_name": name, **body}).json()["id"]
+
+        return self._retrying(run)
+
+    def delete_database(self, database_id: int) -> None:
+        self._call("DELETE", f"/api/v1/database/{database_id}")
+
     # --- Datasets ------------------------------------------------------------
 
     def ensure_dataset(self, *, key: str, name: str, sql: str, database_id: int) -> Dataset:

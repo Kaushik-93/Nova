@@ -3,8 +3,8 @@
 A GenAI BI platform. Connect your data sources, and an AI agent learns them and builds
 Apache Superset dashboards from a sentence or two.
 
-> **Status: in development.** You can build dashboards from a prompt and watch the agent work.
-> Connecting new sources from the UI, sign-in and row-level security are still to come.
+> **Status: in development.** You can sign in, connect sources, limit people to their own
+> tenants, and build dashboards from a prompt while you watch the agent work.
 
 ## Quickstart
 
@@ -19,8 +19,8 @@ seeds the demo data and waits for everything to be healthy.
 
 | Service | URL | Login |
 |---|---|---|
-| **Nova** | http://localhost:13000 | None yet |
-| API | http://localhost:18000/docs | None yet |
+| **Nova** | http://localhost:13000 | `NOVA_ADMIN_EMAIL` and `NOVA_ADMIN_PASSWORD` from `.env` |
+| API | http://localhost:18000/docs | The same session as Nova |
 | Superset | http://localhost:18088 | `admin`, with the password from `.env` |
 | Trino | http://localhost:18080 | Any username |
 
@@ -35,7 +35,66 @@ make skill CATALOG=demo_rental DIALECT=postgres NAME="Rental platform"
 make agent PROMPT="Show revenue by tenant for the last 12 months"
 ```
 
-`docker compose up` also works from the repo root once `.env` exists (`make env`).
+`docker compose up` also works from the repo root once `.env` exists (`make env`). The command
+line is trusted and isn't limited by anyone's access, so keep it to administrators.
+
+## Connecting a source
+
+Sign in as an administrator and open **Sources**. On a fresh install, connect a demo source with
+one click, or use **Connect a source** with a PostgreSQL or MySQL database.
+
+Nova tests the connection and warns you if the login can write. It then registers the source with
+Superset, adds a Trino catalog and profiles the data, and you can follow each step. The password is
+stored encrypted and is never returned or shown to the agent. Use a read-only login.
+
+## People and tenants
+
+Nobody sees any data until an administrator gives them access under **People**.
+
+| Role | Can |
+|---|---|
+| Administrator | Everything, on all data |
+| Analyst | Build dashboards from the sources they can read |
+| Viewer | Open dashboards shared with them |
+
+If a source holds several tenants' data, open **Sources**, choose **Tenants** and confirm the tenant
+column. You can then limit someone to particular tenants. The limit applies everywhere: to every
+query the agent runs for them, and to every dashboard they open, including ones an administrator
+built for everyone. A tenant filter on a shared dashboard offers them only their own tenants.
+
+Dashboards are private to whoever built them until an administrator shares them. Turn tenancy on
+before building dashboards on a source, because every dataset then has to carry the tenant column.
+
+## Single sign-on
+
+Nova signs people in with OpenID Connect, which Okta, Microsoft Entra ID, Google, Auth0 and Keycloak
+all support. SAML isn't supported. SSO stays off, and hidden, until it's configured.
+
+1. Register a web application with your identity provider, using this redirect URI:
+   `http://localhost:18000/api/auth/sso/callback` (your `NOVA_PUBLIC_API_URL`, then
+   `/api/auth/sso/callback`).
+2. Set these in `.env`, then run `make up`:
+
+| Setting | Value |
+|---|---|
+| `OIDC_DISCOVERY_URL` | The provider's `.well-known/openid-configuration` URL |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | From the application you registered |
+| `OIDC_PROVIDER_NAME` | The name on the sign-in button |
+| `OIDC_ALLOWED_DOMAINS` | Optional. Comma-separated email domains allowed to sign in |
+| `OIDC_ADMIN_EMAILS` | Optional. Comma-separated emails that become administrators on first sign-in |
+
+Someone new signs in as a viewer with no access, until an administrator gives them some. An email
+only links to an existing account, or matches `OIDC_ADMIN_EMAILS`, if the provider reports it as
+verified. Some providers, such as Entra ID, don't send that claim, so make the first administrator
+through `NOVA_ADMIN_EMAIL` and promote people from **People**.
+
+## Adding a source type
+
+Add a `Connector` to `CONNECTORS` in `agent/tools/connectors.py`, with its Trino connector, JDBC URL,
+SQLAlchemy driver and a read-only check. Add the type to `Connection.kind` and to the form in
+`ui/src/app/sources/connect-form.tsx`, and install its driver in `infra/superset/requirements.txt`.
+If the database exposes declared keys in its own way, add that query to `agent/tools/profiler.py`.
+Everything after that, including the agent and row limits, works from the Trino catalog.
 
 ## Layout
 

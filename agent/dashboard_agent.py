@@ -25,6 +25,7 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
 from agent.config import Settings
+from agent.harness.access import UserAccess
 from agent.harness.audit import RunContext
 from agent.harness.errors import BudgetExceeded, InvalidRequest, NovaError
 from agent.harness.middleware import EventSink, RunMiddleware, SubagentLimits
@@ -117,7 +118,7 @@ def build_agent(runtime: Runtime, *, require_approval: bool, checkpointer: BaseC
                   *pick("superset_build_status", "superset_get_dashboard", "superset_inspect_dashboard",
                         "superset_guest_token", "finish_dashboard")]
 
-    skills_backend = FilesystemBackend(root_dir=runtime.settings.nova_skills_dir, virtual_mode=True)
+    skills_backend = FilesystemBackend(root_dir=runtime.skills_view or runtime.settings.nova_skills_dir, virtual_mode=True)
     backend = CompositeBackend(default=StateBackend(), routes={"/skills/": skills_backend})
     return create_deep_agent(
         model=runtime.model, tools=main_tools, system_prompt=load_prompt("main"), subagents=subagents,
@@ -153,7 +154,7 @@ def result_from(runtime: Runtime, status: RunStatus, thread_id: str, *, error: s
 def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatModel, checkpointer: BaseCheckpointSaver,
                   context: RunContext, thread_id: str, prompt: str | None = None, resume: Any = None,
                   require_approval: bool = False, store: BaseStore | None = None,
-                  sink: EventSink | None = None) -> RunResult:
+                  sink: EventSink | None = None, access: UserAccess | None = None) -> RunResult:
     """Start a run, continue a conversation, or resume one paused for a person.
 
     Pass `prompt` to start or continue, or `resume` to answer an interrupt. Calling with
@@ -162,7 +163,7 @@ def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatMo
     if not thread_id:
         raise InvalidRequest("a run needs a thread_id: it's what identifies its dashboard")
     runtime = make_runtime(settings, pool, model, context=context, dashboard_key=dashboard_key_for(thread_id),
-                           thread_id=thread_id, sink=sink)
+                           thread_id=thread_id, sink=sink, access=access)
     try:
         runtime.state.dashboard = runtime.superset.find_dashboard(runtime.state.dashboard_key)
         agent = build_agent(runtime, require_approval=require_approval, checkpointer=checkpointer, store=store)
@@ -197,7 +198,10 @@ def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatMo
             state.embed_uuid = runtime.superset.enable_embedding(state.dashboard.id, [settings.nova_ui_origin])
         runtime.save_dashboard()
         outcome = result_from(runtime, RunStatus.FINISHED, thread_id)
-        outcome.guest_token = runtime.superset.guest_token(state.embed_uuid, username=context.user_id)
+        # The API makes the token for whoever opens the dashboard, with their row rules. This one
+        # is for the command line, which is trusted.
+        if access is None:
+            outcome.guest_token = runtime.superset.guest_token(state.embed_uuid, username=context.user_id)
         return outcome
 
     except BudgetExceeded as error:

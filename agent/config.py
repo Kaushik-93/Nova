@@ -20,6 +20,24 @@ class Settings(BaseSettings):
 
     nova_skills_dir: str = "skills"
     nova_ui_origin: str = "http://localhost:13000"
+    nova_public_api_url: str = "http://localhost:18000"
+    nova_trino_secrets_dir: str = "/trino-data/secrets"
+
+    # Sign-in. The first admin is created from these on startup.
+    nova_jwt_secret: str = ""
+    nova_admin_email: str = ""
+    nova_admin_password: str = ""
+    fernet_key: str = ""
+    demo_ro_password: str = ""
+
+    # SSO over OpenID Connect. Stays off until a discovery URL is set.
+    oidc_discovery_url: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_provider_name: str = "SSO"
+    oidc_scopes: str = "openid email profile"
+    oidc_allowed_domains: str = ""
+    oidc_admin_emails: str = ""
     nova_chart_repair_rounds: int = 3
 
     nova_max_steps: int = 150

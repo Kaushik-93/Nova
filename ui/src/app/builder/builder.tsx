@@ -242,7 +242,7 @@ export function Builder() {
             <Button size="sm" variant="ghost" onClick={() => setWide(!wide)}>
               {wide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />} {wide ? "Show assistant" : "Full width"}
             </Button>
-            {slug && config && (
+            {slug && config?.superset_url && (
               <a className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                 href={`${config.superset_url}/superset/dashboard/${slug}/`} target="_blank" rel="noreferrer">
                 Open in Superset <ExternalLink className="size-3" />

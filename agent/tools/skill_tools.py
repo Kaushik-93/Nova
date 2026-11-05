@@ -105,7 +105,7 @@ def make_source_tools(runtime: Runtime) -> list[BaseTool]:
         """Suggest a change to a metric definition, when the user corrects one. A person
         accepts or rejects it; it doesn't take effect until then."""
         name = resolve(name) or name
-        if not store.exists(name):
+        if name not in by_skill or not store.exists(name):
             return unknown(name)
         store.propose_metric(name, key, metric, reason=reason)
         return "Proposed. It takes effect once someone accepts it on the Skills page."

@@ -18,7 +18,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,7 @@ TOP_VALUE_LIMIT = 10
 MAX_DISTINCT_FOR_TOP_VALUES = 30
 MIN_FK_OVERLAP = 0.98
 NEAR_UNIQUE = 0.9
+TENANT_COLUMN = re.compile(r"(tenant|account|organi[sz]ation|org|company|client|workspace)_id")
 KEY_LIKE = re.compile(r"(email|sku|code|number|slug|username)$", re.I)
 
 # Only engine internals. `public` stays: it's where most Postgres tables live.
@@ -168,6 +169,27 @@ def diff_shapes(old: Shape, new: Shape) -> SchemaDiff:
                                if before[c] != after[c]]
     diff.changed_tables = sorted(changed)
     return diff
+
+
+def suggest_tenancy(profile: SourceProfile) -> dict[str, Any] | None:
+    """Guess how a source separates tenants, for an admin to confirm. Nothing depends on this
+    until they do: getting it wrong silently would be a data leak."""
+    counts: dict[str, int] = {}
+    for table in profile.tables:
+        for column in table.columns:
+            if TENANT_COLUMN.fullmatch(column.name.lower()):
+                counts[column.name] = counts.get(column.name, 0) + 1
+    if not counts or max(counts.values()) < 2:
+        return None
+    column = max(counts, key=counts.get)
+    owner = next((t for t in profile.tables if t.primary_key == [column]), None)
+    label = None
+    if owner:
+        names = [c.name for c in owner.columns if re.search(r"(^|_)name$", c.name.lower())]
+        label = names[0] if names else None
+    missing = [t.qualified for t in profile.tables if column not in {c.name for c in t.columns}]
+    return {"column": column, "table": owner.qualified if owner else None, "label_column": label,
+            "tables_without_column": missing}
 
 
 def shape_of(profile: SourceProfile) -> Shape:
@@ -316,7 +338,8 @@ COMMENT_QUERIES = {"postgres": _postgres_comments_sql}
 
 class Profiler:
     def __init__(self, executor: SqlExecutor, *, context: RunContext, budget: RunBudget,
-                 sample_rows: int = SAMPLE_ROWS) -> None:
+                 sample_rows: int = SAMPLE_ROWS, on_table: Callable[[str, int, int], None] | None = None) -> None:
+        self._on_table = on_table  # called with (table, done, total) as each table is measured
         self._executor = executor
         self._context = context
         self._budget = budget
@@ -357,7 +380,9 @@ class Profiler:
 
         tables: list[TableProfile] = []
         unreadable: Shape = {}
-        for qualified, columns in shape.items():
+        for done, (qualified, columns) in enumerate(shape.items(), start=1):
+            if self._on_table:
+                self._on_table(qualified, done, len(shape))
             if only_tables is not None and qualified not in only_tables and qualified in carried:
                 tables.append(carried[qualified])
                 continue

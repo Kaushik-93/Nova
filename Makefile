@@ -14,6 +14,7 @@ up: env ## Build and start the whole stack, seeded, and wait until it is healthy
 	@. ./.env; \
 	  echo; \
 	  echo "Nova is up."; \
+	  echo "  Nova      $$NOVA_UI_ORIGIN  (user: $$NOVA_ADMIN_EMAIL, password in .env)"; \
 	  echo "  Superset  $$SUPERSET_PUBLIC_URL  (user: $$SUPERSET_ADMIN_USER, password in .env)"; \
 	  echo "  Trino     http://localhost:$$TRINO_HOST_PORT"
 

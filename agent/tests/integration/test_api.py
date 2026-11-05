@@ -39,10 +39,14 @@ class FakeRun:
 def client():
     # Starting a server marks runs it finds in progress as abandoned. Here that would catch real
     # runs in the shared database, so these tests skip it, and remove their own runs afterwards.
+    settings = get_settings()
     with mock.patch.object(RunManager, "mark_abandoned"), TestClient(create_app()) as client:
+        signed_in = client.post("/api/auth/login", json={"email": settings.nova_admin_email, "password": settings.nova_admin_password})
+        assert signed_in.status_code == 200, signed_in.text
         yield client
         with client.app.state.services.pool.connection() as conn:
             conn.execute("DELETE FROM runs WHERE prompt = 'p' OR prompt = 'Show sales'")
+            conn.execute("DELETE FROM users WHERE email = %s", (settings.nova_admin_email,))
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@ import "@fontsource-variable/inter";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
-import { Nav } from "@/components/nav";
+import { AppShell } from "@/components/app-shell";
 
 import "./globals.css";
 
@@ -17,8 +17,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} /></head>
       <body className="flex h-screen overflow-hidden">
-        <Nav />
-        <main className="min-h-0 min-w-0 flex-1 overflow-auto">{children}</main>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

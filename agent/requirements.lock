@@ -16,6 +16,12 @@ anyio==4.16.0
     #   openai
     #   sse-starlette
     #   starlette
+argon2-cffi==25.1.0
+    # via -r agent/requirements.txt
+argon2-cffi-bindings==26.1.0
+    # via argon2-cffi
+authlib==1.9.4
+    # via -r agent/requirements.txt
 bracex==3.2.1
     # via wcmatch
 certifi==2026.10.23
@@ -26,13 +32,19 @@ certifi==2026.10.23
     #   langchain-openai
     #   requests
 cffi==2.1.1
-    # via cryptography
+    # via
+    #   argon2-cffi-bindings
+    #   cryptography
 charset-normalizer==3.5.2
     # via requests
 click==8.5.0
     # via uvicorn
 cryptography==50.0.2
-    # via google-auth
+    # via
+    #   -r agent/requirements.txt
+    #   authlib
+    #   google-auth
+    #   joserfc
 deepagents==0.7.32
     # via -r agent/requirements.txt
 distro==1.9.0
@@ -77,10 +89,14 @@ idna==3.20
     #   httpx
     #   httpx2
     #   requests
+itsdangerous==2.2.0
+    # via -r agent/requirements.txt
 jiter==0.18.0
     # via
     #   anthropic
     #   openai
+joserfc==1.8.0
+    # via authlib
 jsonpatch==1.42
     # via langchain-core
 jsonpointer==3.8
@@ -192,6 +208,10 @@ pydantic-settings==2.16.2
     # via -r agent/requirements.txt
 pyee==14.0.0
     # via playwright
+pyjwt==2.15.1
+    # via -r agent/requirements.txt
+pymysql==1.2.3
+    # via -r agent/requirements.txt
 python-dateutil==4.0.0
     # via trino
 python-dotenv==1.2.4

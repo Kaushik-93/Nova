@@ -7,20 +7,25 @@ import { useEffect, useState } from "react";
 import { SUGGESTIONS } from "@/app/builder/suggestions";
 import { Button } from "@/components/ui/button";
 import { api, type DashboardRow, type SourceRow } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 export function Welcome({ onSend, requireApproval, setRequireApproval }: {
   onSend: (prompt: string) => void;
   requireApproval: boolean;
   setRequireApproval: (value: boolean) => void;
 }) {
+  const { user } = useAuth();
   const [prompt, setPrompt] = useState("");
   const [sources, setSources] = useState<SourceRow[] | null>(null);
   const [recent, setRecent] = useState<DashboardRow[]>([]);
 
   useEffect(() => {
     api.sources().then(setSources).catch(() => setSources([]));
-    api.listDashboards().then((rows) => setRecent(rows.slice(0, 3))).catch(() => undefined);
-  }, []);
+    // Only what this person can carry on with: a dashboard shared with them opens elsewhere.
+    api.listDashboards()
+      .then((rows) => setRecent(rows.filter((row) => user.role === "admin" || row.created_by === user.email).slice(0, 3)))
+      .catch(() => undefined);
+  }, [user]);
 
   const suggestions = (sources ?? []).flatMap((source) => (source.skill ? SUGGESTIONS[source.slug] ?? [] : []));
 

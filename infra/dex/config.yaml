@@ -1,0 +1,29 @@
+# A real OpenID Connect provider for the SSO tests. These accounts exist only in the test run,
+# and nothing here is used outside it.
+issuer: http://dex:5556/dex
+storage:
+  type: memory
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  skipApprovalScreen: true
+enablePasswordDB: true
+staticPasswords:
+  - email: person@nova.test
+    hash: "$2a$10$mZGkhvYNjziwtzkGizadf.h83DaeQOS3qXjY6gj6W54dJfeoJcQeK"
+    username: person
+    userID: 11111111-1111-1111-1111-111111111111
+  - email: sso-admin@nova.test
+    hash: "$2a$10$mZGkhvYNjziwtzkGizadf.h83DaeQOS3qXjY6gj6W54dJfeoJcQeK"
+    username: sso-admin
+    userID: 22222222-2222-2222-2222-222222222222
+  - email: outsider@other.test
+    hash: "$2a$10$mZGkhvYNjziwtzkGizadf.h83DaeQOS3qXjY6gj6W54dJfeoJcQeK"
+    username: outsider
+    userID: 33333333-3333-3333-3333-333333333333
+staticClients:
+  - id: nova-test
+    secret: not-a-secret-test-only
+    name: Nova test
+    redirectURIs:
+      - http://localhost:18000/api/auth/sso/callback
