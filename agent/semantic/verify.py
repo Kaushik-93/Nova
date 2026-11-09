@@ -14,8 +14,12 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 import uuid
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -35,6 +39,8 @@ from agent.tools.profiler import SourceProfile
 COLUMN = re.compile(r"^(?:\{CUBE\}\.)?([a-z_][a-z0-9_]*)$|^\{CUBE\.([a-z_][a-z0-9_]*)\}$")
 NO_TENANT = "__nova_no_tenant__"
 MAX_ROUNDS = 4
+PARALLEL = 8  # checks at once: each is one small query, and Cube, Trino and the clients take them concurrently
+STALE_DRAFT_SECONDS = 3600
 
 
 class Verification(BaseModel):
@@ -74,6 +80,7 @@ class Verifier:
             # Cube would refuse to compile it, or worse, compile something unsafe.
             return Verification(problems=problems)
         scoped, manifest = apply_tenancy(model, catalog=self.catalog, profile=self.profile, tenancy=self.tenancy)
+        self._remove_stale_drafts()
         draft = uuid.uuid4().hex[:16]
         directory = self.skills_dir / "_drafts" / draft
         try:
@@ -86,16 +93,23 @@ class Verifier:
             except NovaError as error:
                 return Verification(problems=[_compile_problem(error.message, model)])
             report = Verification()
+            checks: list[Callable[[], None]] = []
             for cube in model.cubes:
-                self._check_members(cube, identity, report)
-                self._check_primary_key(cube, report)
-                for join in cube.joins:
-                    self._check_join(cube, join.name, join.relationship, join.sql, model, report)
+                checks += [partial(self._check_measure, cube, measure, identity, report) for measure in cube.measures]
+                checks += [partial(self._check_dimension, cube, dimension, identity, report) for dimension in cube.dimensions
+                           if not dimension.primary_key and dimension.public is not False]
+                checks.append(partial(self._check_primary_key, cube, report))
+                checks += [partial(self._check_join, cube, join.name, join.relationship, join.sql, model, report)
+                           for join in cube.joins]
             for name, rule in manifest["cubes"].items():
                 if rule.get("tenant_dimension"):
-                    self._check_tenant_limit(model.cube(name), identity, report)
-            for example in examples:
-                self._check_example(example, identity, report)
+                    checks.append(partial(self._check_tenant_limit, model.cube(name), identity, report))
+            passed = [False] * len(examples)
+            for index, example in enumerate(examples):
+                checks.append(partial(self._check_example, example, identity, report, passed, index))
+            _run_all(checks)
+            report.examples = [example for example, ok in zip(examples, passed) if ok]
+            report.problems.sort(key=lambda problem: problem.item)  # checks finish in any order
             return report
         finally:
             shutil.rmtree(directory, ignore_errors=True)
@@ -104,34 +118,39 @@ class Verifier:
         self.budget.spend_query()
         return self.cube.load(identity, query).data
 
-    def _check_members(self, cube: Cube, identity: CubeIdentity, report: Verification) -> None:
-        for measure in cube.measures:
-            member = f"{cube.name}.{measure.name}"
-            try:
-                rows = self._load(identity, {"measures": [member]})
-            except NovaError as error:
-                _reraise_budget(error)
-                report.problems.append(Problem(item=f"measure {member}", cube=cube.name, member=measure.name,
-                                               reason=error.message))
-                continue
-            value = rows[0].get(member) if rows else None
-            if value is None:
-                report.problems.append(Problem(item=f"measure {member}", cube=cube.name, member=measure.name,
-                                               reason="it returned NULL: its filters may match nothing"))
-            else:
-                report.values[member] = float(value)
-        for dimension in cube.dimensions:
-            if dimension.primary_key or dimension.public is False:
-                continue
-            member = f"{cube.name}.{dimension.name}"
-            query = ({"timeDimensions": [{"dimension": member, "granularity": "month"}], "measures": [], "limit": 1}
-                     if dimension.type == "time" else {"dimensions": [member], "limit": 1})
-            try:
-                self._load(identity, query)
-            except NovaError as error:
-                _reraise_budget(error)
-                report.problems.append(Problem(item=f"dimension {member}", cube=cube.name, member=dimension.name,
-                                               reason=error.message))
+    def _remove_stale_drafts(self) -> None:
+        """A run that was killed mid-check can't clean up after itself, so the next one does."""
+        drafts = self.skills_dir / "_drafts"
+        for directory in drafts.iterdir() if drafts.is_dir() else []:
+            if time.time() - directory.stat().st_mtime > STALE_DRAFT_SECONDS:
+                shutil.rmtree(directory, ignore_errors=True)
+
+    def _check_measure(self, cube: Cube, measure, identity: CubeIdentity, report: Verification) -> None:
+        member = f"{cube.name}.{measure.name}"
+        try:
+            rows = self._load(identity, {"measures": [member]})
+        except NovaError as error:
+            _reraise_budget(error)
+            report.problems.append(Problem(item=f"measure {member}", cube=cube.name, member=measure.name,
+                                           reason=error.message))
+            return
+        value = rows[0].get(member) if rows else None
+        if value is None:
+            report.problems.append(Problem(item=f"measure {member}", cube=cube.name, member=measure.name,
+                                           reason="it returned NULL: its filters may match nothing"))
+        else:
+            report.values[member] = float(value)
+
+    def _check_dimension(self, cube: Cube, dimension, identity: CubeIdentity, report: Verification) -> None:
+        member = f"{cube.name}.{dimension.name}"
+        query = ({"timeDimensions": [{"dimension": member, "granularity": "month"}], "measures": [], "limit": 1}
+                 if dimension.type == "time" else {"dimensions": [member], "limit": 1})
+        try:
+            self._load(identity, query)
+        except NovaError as error:
+            _reraise_budget(error)
+            report.problems.append(Problem(item=f"dimension {member}", cube=cube.name, member=dimension.name,
+                                           reason=error.message))
 
     def _check_primary_key(self, cube: Cube, report: Verification) -> None:
         keys = [dimension for dimension in cube.dimensions if dimension.primary_key]
@@ -185,7 +204,8 @@ class Verifier:
                 reason=f"it can't be limited to one tenant, because the tenant column {self.tenancy.column} isn't in "
                        f"its rows ({error.message}). Select it in the cube's sql"))
 
-    def _check_example(self, example: Example, identity: CubeIdentity, report: Verification) -> None:
+    def _check_example(self, example: Example, identity: CubeIdentity, report: Verification, passed: list[bool],
+                       index: int) -> None:
         try:
             rows = self._load(identity, example.query.to_cube())
         except NovaError as error:
@@ -197,7 +217,7 @@ class Verifier:
             report.problems.append(Problem(item=f"example {example.question!r}", example=example.question,
                                            reason="it returned no rows"))
         else:
-            report.examples.append(example)
+            passed[index] = True
 
     def _run(self, sql: str, report: Verification, cube: Cube) -> list[list]:
         try:
@@ -206,6 +226,19 @@ class Verifier:
             _reraise_budget(error)
             report.problems.append(Problem(item=f"cube {cube.name}", cube=cube.name, reason=error.message))
             return []
+
+
+def _run_all(checks: list[Callable[[], None]]) -> None:
+    """Run the checks concurrently. The first to raise, such as a spent budget, stops the rest."""
+    with ThreadPoolExecutor(max_workers=PARALLEL, thread_name_prefix="verify") as pool:
+        futures = [pool.submit(check) for check in checks]
+        try:
+            for future in futures:
+                future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
 
 
 def _reraise_budget(error: NovaError) -> None:
@@ -280,11 +313,13 @@ def prune(model: DataModel, problems: list[Problem]) -> tuple[DataModel, list[st
     return model, dropped
 
 
-def finalize(verifier: Verifier, model: DataModel, examples: list[Example]) -> tuple[DataModel, Verification, list[str]]:
-    """Verify, dropping whatever fails, until everything left works."""
+def finalize(verifier: Verifier, model: DataModel, examples: list[Example], *,
+             verified: Verification | None = None) -> tuple[DataModel, Verification, list[str]]:
+    """Verify, dropping whatever fails, until everything left works. `verified` is a report on
+    exactly this model and these examples, if there is one, which saves running it all again."""
     dropped: list[str] = []
-    for _ in range(MAX_ROUNDS):
-        report = verifier.verify(model, examples)
+    for round_ in range(MAX_ROUNDS):
+        report = verified if round_ == 0 and verified is not None else verifier.verify(model, examples)
         if not report.blocking:
             dropped += [f"{p.item}: {p.reason}" for p in report.problems]
             return model, report, dropped

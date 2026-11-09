@@ -67,7 +67,12 @@ def runtime(pool, events):
     yield runtime
     state, superset = runtime.state, runtime.superset
     with pool.connection() as conn:
+        # Saving a dashboard files it into a new project of its own, so that goes too.
+        projects = [row[0] for row in conn.execute("SELECT project_id FROM dashboards WHERE thread_id = %s AND project_id IS NOT NULL",
+                                                   (thread,)).fetchall()]
         conn.execute("DELETE FROM dashboards WHERE thread_id = %s", (thread,))
+        conn.execute("DELETE FROM projects p WHERE p.id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM dashboards d WHERE d.project_id = p.id)",
+                     (projects,))
 
     def remove(delete, object_id):
         with contextlib.suppress(NotFound):  # finishing may already have removed it

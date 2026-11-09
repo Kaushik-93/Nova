@@ -35,7 +35,7 @@ DEMOS = {
                        "catalog": "demo_marketing", "description": "Campaigns and ad spend"},
 }
 PUBLIC_FIELDS = {"slug", "display_name", "dialect", "status"}
-PROFILE_LIMITS = BudgetLimits(max_steps=80, max_tokens=800_000, max_wall_seconds=600, max_sql_queries=1500)
+PROFILE_LIMITS = BudgetLimits(max_steps=80, max_tokens=800_000, max_wall_seconds=1800, max_sql_queries=1500)
 
 
 class TenancyBody(BaseModel):

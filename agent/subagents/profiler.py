@@ -38,7 +38,7 @@ from agent.harness.logs import configure_logging
 from agent.harness.middleware import EventSink, RunMiddleware
 from agent.harness.untrusted import wrap_untrusted
 from agent.llm import build_model
-from agent.semantic.access import Tenancy
+from agent.semantic.access import Tenancy, tenancy_of
 from agent.semantic.client import CubeClient
 from agent.semantic.model import Cube, DataModel, MemberMeta, Status
 from agent.semantic.query import Example
@@ -46,7 +46,7 @@ from agent.semantic.review import merge_reviewed
 from agent.semantic.verify import Verification, Verifier, finalize
 from agent.tools.profiler import Profiler, SourceProfile, TableProfile
 from agent.tools.skill_store import SkillFrontmatter, SkillStore, skill_slug
-from agent.tools.sources import register_source
+from agent.tools.sources import get_source_by_slug, register_source
 from agent.tools.sql_tools import make_run_readonly_sql
 
 logger = logging.getLogger(__name__)
@@ -175,7 +175,7 @@ def repair_message(report: Verification) -> str:
 
 def draft_skill(model: BaseChatModel, profile: SourceProfile, *, verifier: Verifier, executor: SqlExecutor,
                 reviewed: DataModel | None, context: RunContext, budget: RunBudget,
-                sink: EventSink | None = None) -> SkillDraft:
+                sink: EventSink | None = None) -> tuple[SkillDraft, Verification]:
     """Run the agent until it has submitted a skill the harness has checked."""
     policy = SqlPolicy(allowed_catalogs=frozenset({profile.catalog}), max_rows=1000)
     submission = Submission()
@@ -189,9 +189,9 @@ def draft_skill(model: BaseChatModel, profile: SourceProfile, *, verifier: Verif
         # It stopped without finishing, so remind it once rather than fail the run.
         reminder = HumanMessage("You stopped before submit_skill accepted the skill. Call submit_skill now.")
         agent.invoke({"messages": [*result["messages"], reminder]}, config)
-    if submission.draft is None:
+    if submission.draft is None or submission.report is None:
         raise QueryFailure("the profiler never submitted a skill")
-    return submission.draft
+    return submission.draft, submission.report
 
 
 def generate_skill(*, model: BaseChatModel, store: SkillStore, executor: SqlExecutor, cube: CubeClient, source_id: str,
@@ -207,10 +207,11 @@ def generate_skill(*, model: BaseChatModel, store: SkillStore, executor: SqlExec
     verifier = Verifier(cube=cube, executor=executor, skills_dir=store.root, slug=slug, profile=profile, context=context,
                         budget=budget, tenancy=tenancy, taken=store.cube_names(excluding=slug))
     reviewed = store.read_model(slug)
-    draft = draft_skill(model, profile, verifier=verifier, executor=executor, reviewed=reviewed, context=context,
-                        budget=budget, sink=sink)
+    draft, last = draft_skill(model, profile, verifier=verifier, executor=executor, reviewed=reviewed, context=context,
+                              budget=budget, sink=sink)
+    # The last submission was checked as exactly this model, so finalize needn't run it all again.
     merged, proposals = merge_reviewed(reviewed, draft.model())
-    final, report, dropped = finalize(verifier, merged, draft.examples)
+    final, report, dropped = finalize(verifier, merged, draft.examples, verified=last)
     cubes = len(final.cubes)
     change = [f"Profiled {len(profile.tables)} tables. {cubes} cubes, {len(report.values)} measures and "
               f"{len(report.examples)} examples verified by running them."]
@@ -220,9 +221,13 @@ def generate_skill(*, model: BaseChatModel, store: SkillStore, executor: SqlExec
                        change="\n".join(change))
 
 
+PROFILE_WALL_SECONDS = 1800  # measuring, drafting and checking every definition: a limit for runaways, not a target
+
+
 def budget_from(settings: Settings) -> RunBudget:
     return RunBudget(BudgetLimits(max_steps=settings.nova_max_steps, max_tokens=settings.nova_max_tokens,
-                                  max_wall_seconds=settings.nova_max_wall_seconds, max_sql_queries=1000))
+                                  max_wall_seconds=max(settings.nova_max_wall_seconds, PROFILE_WALL_SECONDS),
+                                  max_sql_queries=1500))
 
 
 def main() -> None:
@@ -239,12 +244,15 @@ def main() -> None:
     slug = skill_slug(args.catalog)
     budget = budget_from(settings)
     cube = CubeClient(settings.cube_url, settings.cubejs_api_secret)
+    source_id = register_source(pool, slug=slug, display_name=args.name or args.catalog, catalog=args.catalog,
+                                dialect=args.dialect)
+    # A source an administrator has set up as multi-tenant keeps those settings.
+    source = get_source_by_slug(pool, slug)
+    tenancy = tenancy_of(source) if source else Tenancy()
     front = generate_skill(
         model=build_model(settings), store=SkillStore(settings.nova_skills_dir, pool),
         executor=SqlExecutor(settings.trino_url, AuditLog(pool)), cube=cube,
-        source_id=register_source(pool, slug=slug, display_name=args.name or args.catalog, catalog=args.catalog,
-                                  dialect=args.dialect),
-        slug=slug, catalog=args.catalog, dialect=args.dialect,
+        source_id=source_id, slug=slug, catalog=args.catalog, dialect=args.dialect, tenancy=tenancy,
         context=RunContext(run_id=f"profile-{uuid.uuid4().hex[:12]}", user_id="system"), budget=budget)
     print(f"wrote {front.name} v{front.version}: {budget.snapshot()}")
     cube.close()
