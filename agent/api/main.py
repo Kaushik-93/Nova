@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from agent.api import auth, sources as source_routes, users
+from agent.api import auth, projects as project_routes, sources as source_routes, users
 from agent.api.auth import LoginThrottle, User, check_secret, create_sso_client, current_user, ensure_admin, require_admin, require_builder
 from agent.api.runs import RunManager
 from agent.api.timing import summarise
@@ -30,6 +30,7 @@ from agent.harness.executor import SqlExecutor
 from agent.harness.logs import configure_logging
 from agent.harness.validators import chart_dataset_id
 from agent.llm import build_model
+from agent.projects import can_edit, can_view_sheet, load_projects, project_of_sheet
 from agent.tools.skill_store import SkillStore, parse_frontmatter
 from agent.tools.sources import list_sources
 from agent.tools.superset_client import SupersetClient
@@ -44,6 +45,7 @@ class StartRun(BaseModel):
     prompt: str
     thread_id: str | None = None
     require_approval: bool = False
+    project: str | None = None  # the project a new sheet goes in; without one it gets its own
 
 
 class ResumeRun(BaseModel):
@@ -51,10 +53,6 @@ class ResumeRun(BaseModel):
     rejected: bool = False
     reason: str | None = None
     answer: str | None = None
-
-
-class DashboardChange(BaseModel):
-    shared: bool
 
 
 class Services:
@@ -113,6 +111,7 @@ def create_app() -> FastAPI:
                        allow_credentials=True)
     app.include_router(auth.router)
     app.include_router(users.router)
+    app.include_router(project_routes.router)
     app.include_router(source_routes.router)
 
     @app.exception_handler(NovaError)
@@ -140,14 +139,15 @@ def create_app() -> FastAPI:
         return run
 
     def visible_dashboard(app_services: Services, slug: str, user: User) -> tuple:
-        with app_services.pool.connection() as conn:
-            row = conn.execute("SELECT superset_id, embed_uuid, title, created_by, shared, catalogs FROM dashboards WHERE slug = %s",
-                               (slug,)).fetchone()
-        if row is None or not row[1] or not (user.role == "admin" or row[3] == user.email or row[4]):
-            raise NotFound(f"no dashboard {slug}")
-        granted = app_services.access_of(user).readable_catalogs(list_sources(app_services.pool))
-        if user.role != "admin" and row[5] and not set(row[5]) <= set(granted):
+        project = project_of_sheet(app_services.pool, slug=slug)
+        sheet = next((item for item in project.sheets if item.slug == slug), None) if project else None
+        granted = set(app_services.access_of(user).readable_catalogs(list_sources(app_services.pool)))
+        if sheet is None or not can_view_sheet(project, sheet, email=user.email, role=user.role, granted=granted):
             raise NotFound(f"no dashboard {slug}")  # not 403, which would confirm it exists
+        with app_services.pool.connection() as conn:
+            row = conn.execute("SELECT superset_id, embed_uuid, title, catalogs FROM dashboards WHERE slug = %s", (slug,)).fetchone()
+        if not row[1]:
+            raise NotFound(f"no dashboard {slug}")
         return row
 
     @app.get("/api/health")
@@ -165,11 +165,17 @@ def create_app() -> FastAPI:
     @app.post("/api/runs", status_code=202)
     def start_run(body: StartRun, request: Request, user: User = Depends(require_builder)) -> dict[str, str]:
         app_services = services(request)
+        project_id = None
+        if body.project:
+            project_id = project_routes.editable_project(app_services, body.project, user).id
         if body.thread_id:
             owner = app_services.runs.owner_of_thread(body.thread_id)
             if owner and owner != user.email and user.role != "admin":
                 raise NotFound("no such conversation")
-        return app_services.runs.start(body.prompt, thread_id=body.thread_id, user_id=user.email,
+            existing = project_of_sheet(app_services.pool, thread_id=body.thread_id)
+            if existing and not can_edit(existing, email=user.email, role=user.role):
+                raise HTTPException(403, "this sheet's project is shared, so only an administrator can change it")
+        return app_services.runs.start(body.prompt, thread_id=body.thread_id, user_id=user.email, project_id=project_id,
                                        require_approval=body.require_approval, access=app_services.access_of(user))
 
     @app.get("/api/runs")
@@ -217,29 +223,15 @@ def create_app() -> FastAPI:
 
     @app.get("/api/dashboards")
     def list_dashboards(request: Request, user: User = Depends(current_user)) -> list[dict[str, Any]]:
+        """Every sheet this person can see, newest first, whichever project it's in."""
         app_services = services(request)
-        where, values = "", ()
-        if user.role != "admin":
-            # Someone who lost access to a source no longer sees even the titles built on it.
-            granted = app_services.access_of(user).readable_catalogs(list_sources(app_services.pool))
-            where, values = "WHERE (created_by = %s OR shared) AND catalogs <@ %s::text[]", (user.email, granted)
-        with app_services.pool.connection() as conn:
-            cursor = conn.execute(f"""SELECT slug, thread_id, superset_id, title, summary, created_by, shared, created_at, updated_at
-                                      FROM dashboards {where} ORDER BY updated_at DESC""", values)
-            columns = [c.name for c in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-    @app.patch("/api/dashboards/{slug}")
-    def change_dashboard(slug: str, body: DashboardChange, request: Request, user: User = Depends(require_admin)) -> dict[str, bool]:
-        """Sharing is for administrators: it decides what other people can see, and an owner with
-        wide access could otherwise show a dashboard's data to someone with narrower access."""
-        app_services = services(request)
-        row = visible_dashboard(app_services, slug, user)
-        if body.shared and not row[5]:
-            raise HTTPException(400, "this dashboard was built before access controls; rebuild it to share it")
-        with app_services.pool.connection() as conn:
-            conn.execute("UPDATE dashboards SET shared = %s WHERE slug = %s", (body.shared, slug))
-        return {"shared": body.shared}
+        granted = set(app_services.access_of(user).readable_catalogs(list_sources(app_services.pool)))
+        rows = [{"slug": sheet.slug, "thread_id": sheet.thread_id, "superset_id": sheet.superset_id, "title": sheet.title,
+                 "summary": sheet.summary, "created_by": sheet.created_by, "updated_at": sheet.updated_at,
+                 "sheet_name": sheet.name, "project_slug": project.slug, "project_name": project.name}
+                for project in load_projects(app_services.pool) for sheet in project.sheets
+                if can_view_sheet(project, sheet, email=user.email, role=user.role, granted=granted)]
+        return sorted(rows, key=lambda row: row["updated_at"], reverse=True)
 
     @app.get("/api/dashboards/{slug}/embed")
     def embed_dashboard(slug: str, request: Request, user: User = Depends(current_user)) -> dict[str, Any]:
@@ -247,7 +239,7 @@ def create_app() -> FastAPI:
         user, with their row rules in it, so a shared dashboard shows each person their own data.
         The SDK asks for a new one here whenever it needs to."""
         app_services = services(request)
-        superset_id, embed_uuid, title, _, _, catalogs = visible_dashboard(app_services, slug, user)
+        superset_id, embed_uuid, title, catalogs = visible_dashboard(app_services, slug, user)
         rules = guest_rules(app_services.access_of(user), list_sources(app_services.pool), list(catalogs), app_services.skills)
         metadata = json.loads(app_services.superset.dashboard_detail(superset_id).get("json_metadata") or "{}")
         filters = [{"id": native["id"], "name": native["name"],

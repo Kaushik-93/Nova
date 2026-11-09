@@ -109,6 +109,15 @@ EXTRA_CATEGORICAL_COLOR_SCHEMES = [{
     "colors": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
 }]
 
+# One hue from light to dark, for how much of something. Heatmaps and maps use it.
+EXTRA_SEQUENTIAL_COLOR_SCHEMES = [{
+    "id": "novaBlues",
+    "label": "Nova blues",
+    "isDefault": True,
+    "isDiverging": False,
+    "colors": ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"],
+}]
+
 # Setting a theme replaces Superset's defaults outright, so its other tokens are repeated here.
 _BRAND_TOKENS = {
     "brandAppName": "Nova",

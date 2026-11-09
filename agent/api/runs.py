@@ -40,14 +40,15 @@ class RunManager:
             # Connecting a source dies with its process too. It can't be resumed, but can be retried.
             conn.execute("UPDATE sources SET status = 'failed' WHERE status IN ('connecting', 'profiling')")
 
-    def _insert(self, run_id: str, thread_id: str, prompt: str, user_id: str, *, kind: str = "dashboard") -> None:
+    def _insert(self, run_id: str, thread_id: str, prompt: str, user_id: str, *, kind: str = "dashboard",
+                project_id: str | None = None) -> None:
         with self._pool.connection() as conn:
             active = conn.execute("SELECT 1 FROM runs WHERE thread_id = %s AND status = %s", (thread_id, RUNNING)).fetchone()
             if active:
                 raise InvalidRequest("this conversation already has a run in progress")
-            conn.execute("""INSERT INTO runs (run_id, thread_id, prompt, status, created_by, kind, dashboard_key)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                         (run_id, thread_id, prompt, RUNNING, user_id, kind, dashboard_key_for(thread_id)))
+            conn.execute("""INSERT INTO runs (run_id, thread_id, prompt, status, created_by, kind, dashboard_key, project_id)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                         (run_id, thread_id, prompt, RUNNING, user_id, kind, dashboard_key_for(thread_id), project_id))
 
     def owner_of_thread(self, thread_id: str) -> str | None:
         with self._pool.connection() as conn:
@@ -59,14 +60,14 @@ class RunManager:
             return conn.execute("SELECT 1 FROM runs WHERE dashboard_key = %s AND created_by = %s LIMIT 1", (key, user_id)).fetchone() is not None
 
     def start(self, prompt: str, *, thread_id: str | None, user_id: str, require_approval: bool,
-              access: UserAccess | None = None) -> dict[str, str]:
+              access: UserAccess | None = None, project_id: str | None = None) -> dict[str, str]:
         if not prompt.strip():
             raise InvalidRequest("a run needs a prompt")
         run_id = f"run-{uuid.uuid4().hex[:12]}"
         thread = thread_id or f"thread-{uuid.uuid4().hex[:12]}"
-        self._insert(run_id, thread, prompt, user_id)
+        self._insert(run_id, thread, prompt, user_id, project_id=project_id)
         self._executor.submit(self._execute, run_id, thread, user_id, prompt=prompt, require_approval=require_approval,
-                              access=access)
+                              access=access, project_id=project_id)
         return {"run_id": run_id, "thread_id": thread}
 
     def start_job(self, *, label: str, thread_id: str, user_id: str, job: Callable[[RunContext, Any], dict[str, Any]]) -> dict[str, str]:
@@ -101,8 +102,10 @@ class RunManager:
         elif previous["status"] != INTERRUPTED and previous["status"] != RunStatus.FAILED.value:
             raise InvalidRequest(f"a run that is {previous['status']} can't be resumed")
         new_run = f"run-{uuid.uuid4().hex[:12]}"
-        self._insert(new_run, previous["thread_id"], previous["prompt"], user_id)
+        project_id = previous.get("project_id")
+        self._insert(new_run, previous["thread_id"], previous["prompt"], user_id, project_id=project_id)
         self._executor.submit(self._execute, new_run, previous["thread_id"], user_id, resume=answer, access=access,
+                              project_id=project_id,
                               require_approval=previous["status"] == RunStatus.AWAITING_APPROVAL.value)
         return {"run_id": new_run, "thread_id": previous["thread_id"]}
 
@@ -125,7 +128,7 @@ class RunManager:
     def get(self, run_id: str) -> dict[str, Any]:
         with self._pool.connection() as conn:
             cursor = conn.execute(
-                """SELECT run_id, thread_id, prompt, status, created_by, kind, started_at, finished_at, result,
+                """SELECT run_id, thread_id, prompt, status, created_by, kind, project_id::text, started_at, finished_at, result,
                           EXTRACT(EPOCH FROM COALESCE(finished_at, now()) - started_at) AS wall_seconds
                    FROM runs WHERE run_id = %s""", (run_id,))
             row = cursor.fetchone()

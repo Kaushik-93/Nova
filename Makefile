@@ -1,7 +1,7 @@
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help env up down reset logs ps seed test test-llm lock skill agent
+.PHONY: help env up down reset logs ps seed test test-llm lock skill agent gallery
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-8s %s\n", $$1, $$2}'
@@ -45,6 +45,9 @@ skill: up ## Profile a source: make skill CATALOG=demo_rental DIALECT=postgres N
 
 agent: up ## Build a dashboard: make agent PROMPT="..." (add THREAD=name to change one)
 	$(COMPOSE) --profile test run --rm --build -T agent-tests python -m agent.cli --prompt "$(PROMPT)" --thread "$(THREAD)"
+
+gallery: up ## Build the Chart gallery project: one of every chart, on the rental demo data
+	$(COMPOSE) exec -T agent python -m agent.gallery
 
 lock: ## Regenerate agent/requirements.lock (needs uv)
 	uv pip compile agent/requirements.txt --python-version 3.13 --python-platform linux -q -o agent/requirements.lock

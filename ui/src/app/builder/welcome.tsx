@@ -6,21 +6,26 @@ import { useEffect, useState } from "react";
 
 import { SUGGESTIONS } from "@/app/builder/suggestions";
 import { Button } from "@/components/ui/button";
-import { api, type DashboardRow, type SourceRow } from "@/lib/api";
+import { Select } from "@/components/ui/field";
+import { api, type DashboardRow, type Project, type SourceRow } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
-export function Welcome({ onSend, requireApproval, setRequireApproval }: {
+export function Welcome({ onSend, requireApproval, setRequireApproval, project, setProject }: {
   onSend: (prompt: string) => void;
   requireApproval: boolean;
   setRequireApproval: (value: boolean) => void;
+  project: string | null;
+  setProject: (slug: string | null) => void;
 }) {
   const { user } = useAuth();
   const [prompt, setPrompt] = useState("");
   const [sources, setSources] = useState<SourceRow[] | null>(null);
   const [recent, setRecent] = useState<DashboardRow[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
     api.sources().then(setSources).catch(() => setSources([]));
+    api.projects().then((rows) => setProjects(rows.filter((row) => row.can_edit))).catch(() => undefined);
     // Only what this person can carry on with: a dashboard shared with them opens elsewhere.
     api.listDashboards()
       .then((rows) => setRecent(rows.filter((row) => user.role === "admin" || row.created_by === user.email).slice(0, 3)))
@@ -39,11 +44,15 @@ export function Welcome({ onSend, requireApproval, setRequireApproval }: {
           placeholder="Revenue by region for the last 12 months, with a filter for tenant…"
           className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && prompt.trim()) { e.preventDefault(); onSend(prompt); } }} />
-        <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
           <label className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
             <input type="checkbox" checked={requireApproval} onChange={(e) => setRequireApproval(e.target.checked)} className="accent-[var(--primary)]" />
             Let me approve the plan first
           </label>
+          <Select aria-label="Project" className="ml-auto h-8 w-52 text-xs" value={project ?? ""} onChange={(e) => setProject(e.target.value || null)}>
+            <option value="">In a new project</option>
+            {projects.map((row) => <option key={row.slug} value={row.slug}>As a sheet in {row.name}</option>)}
+          </Select>
           <Button size="icon" aria-label="Send" disabled={!prompt.trim()} onClick={() => onSend(prompt)}><ArrowUp className="size-4" /></Button>
         </div>
       </div>

@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from agent.config import Settings
 from agent.harness.access import UserAccess
+from agent.projects import describe_for_agent
 from agent.harness.audit import RunContext
 from agent.harness.errors import BudgetExceeded, InvalidRequest, NovaError
 from agent.harness.middleware import EventSink, RunMiddleware, SubagentLimits
@@ -154,7 +155,8 @@ def result_from(runtime: Runtime, status: RunStatus, thread_id: str, *, error: s
 def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatModel, checkpointer: BaseCheckpointSaver,
                   context: RunContext, thread_id: str, prompt: str | None = None, resume: Any = None,
                   require_approval: bool = False, store: BaseStore | None = None,
-                  sink: EventSink | None = None, access: UserAccess | None = None) -> RunResult:
+                  sink: EventSink | None = None, access: UserAccess | None = None,
+                  project_id: str | None = None) -> RunResult:
     """Start a run, continue a conversation, or resume one paused for a person.
 
     Pass `prompt` to start or continue, or `resume` to answer an interrupt. Calling with
@@ -163,7 +165,7 @@ def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatMo
     if not thread_id:
         raise InvalidRequest("a run needs a thread_id: it's what identifies its dashboard")
     runtime = make_runtime(settings, pool, model, context=context, dashboard_key=dashboard_key_for(thread_id),
-                           thread_id=thread_id, sink=sink, access=access)
+                           thread_id=thread_id, sink=sink, access=access, project_id=project_id)
     try:
         runtime.state.dashboard = runtime.superset.find_dashboard(runtime.state.dashboard_key)
         agent = build_agent(runtime, require_approval=require_approval, checkpointer=checkpointer, store=store)
@@ -174,6 +176,7 @@ def run_dashboard(*, settings: Settings, pool: ConnectionPool, model: BaseChatMo
         elif prompt is not None:
             preferences = load_preferences(store)
             intro = f"Org preferences, set by an administrator:\n{preferences}\n\n" if preferences else ""
+            intro += describe_for_agent(pool, project_id=project_id, sheet_slug=runtime.state.dashboard_key)
             payload = {"messages": [HumanMessage(f"{intro}{prompt}")]}
         else:
             payload = None

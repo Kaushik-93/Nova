@@ -75,17 +75,20 @@ def dashboard_row(services):
     slugs = []
 
     def add(owner: str, *, shared: bool = False, catalogs: tuple[str, ...] = ("demo_rental",)) -> str:
-        slug = f"auth-test-{uuid.uuid4().hex[:8]}"
+        slug = f"auth-test-{uuid.uuid4().hex[:8]}"  # the project and its only sheet share a name, for brevity
         with services.pool.connection() as conn:
-            conn.execute("""INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, created_by, shared, catalogs)
+            project = conn.execute("INSERT INTO projects (slug, name, created_by, shared) VALUES (%s, 'Auth test', %s, %s) RETURNING id",
+                                   (slug, owner, shared)).fetchone()[0]
+            conn.execute("""INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, created_by, catalogs, project_id)
                             VALUES (%s, %s, 0, %s, 'Auth test', %s, %s, %s)""",
-                         (slug, slug, str(uuid.uuid4()), owner, shared, list(catalogs)))
+                         (slug, slug, str(uuid.uuid4()), owner, list(catalogs), project))
         slugs.append(slug)
         return slug
 
     yield add
     with services.pool.connection() as conn:
         conn.execute("DELETE FROM dashboards WHERE slug = ANY(%s)", (slugs,))
+        conn.execute("DELETE FROM projects WHERE slug = ANY(%s)", (slugs,))
 
 
 def filled(path: str) -> str:
@@ -121,7 +124,6 @@ def test_a_forged_session_is_refused(app):
     ("POST", "/api/sources"), ("POST", "/api/sources/test"), ("GET", "/api/sources/demos"), ("POST", "/api/sources/demos/demo-shop"),
     ("POST", "/api/sources/demo-shop/profile"), ("GET", "/api/sources/demo-shop/tenancy"), ("PUT", "/api/sources/demo-shop/tenancy"),
     ("GET", "/api/sources/demo-shop/tenants"), ("GET", "/api/skills/demo-shop"), ("POST", "/api/skills/demo-shop/approve"),
-    ("PATCH", "/api/dashboards/any"),
 ])
 def test_administration_is_for_administrators(make_user, method, path):
     analyst = make_user("analyst")
@@ -234,7 +236,7 @@ def test_dashboards_are_private_until_shared(admin, make_user, dashboard_row):
     slug = dashboard_row(owner.email)
     assert slug not in [row["slug"] for row in other.get("/api/dashboards").json()]
     assert other.get(f"/api/dashboards/{slug}/embed").status_code == 404
-    assert admin.patch(f"/api/dashboards/{slug}", json={"shared": True}).status_code == 200
+    assert admin.patch(f"/api/projects/{slug}", json={"shared": True}).status_code == 200
     assert slug in [row["slug"] for row in other.get("/api/dashboards").json()]
 
 
@@ -257,7 +259,7 @@ def test_losing_access_hides_your_own_dashboards(admin, make_user, dashboard_row
 
 def test_a_dashboard_with_no_record_of_its_sources_cant_be_shared(admin, dashboard_row):
     slug = dashboard_row("someone@nova.local", catalogs=())
-    assert admin.patch(f"/api/dashboards/{slug}", json={"shared": True}).status_code == 400
+    assert admin.patch(f"/api/projects/{slug}", json={"shared": True}).status_code == 400
 
 
 def test_a_chart_preview_is_only_for_whoever_built_it(admin, make_user, services):

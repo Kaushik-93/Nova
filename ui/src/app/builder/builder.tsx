@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowUp, CheckCircle2, ExternalLink, Filter, Loader2, Maximize2, Minimize2, Plus, ShieldAlert, TriangleAlert } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -14,7 +15,7 @@ import { EmptyState, ErrorState, Loading } from "@/components/states";
 import { TimingPanel } from "@/components/timing-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, type Config, type Plan, type RunListItem } from "@/lib/api";
+import { api, type Config, type DashboardRow, type Plan, type RunListItem } from "@/lib/api";
 import { toMilestones, toStages } from "@/lib/steps";
 import { useNow, useRun } from "@/lib/use-run";
 import { cn } from "@/lib/utils";
@@ -40,9 +41,12 @@ function Status({ status, hasDashboard, warnings }: { status?: string; hasDashbo
 
 export function Builder() {
   const router = useRouter();
-  const threadFromUrl = useSearchParams().get("thread");
+  const params = useSearchParams();
+  const threadFromUrl = params.get("thread");
 
   const [threadId, setThreadId] = useState<string | null>(threadFromUrl);
+  const [project, setProject] = useState<string | null>(params.get("project"));
+  const [sheet, setSheet] = useState<DashboardRow | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [history, setHistory] = useState<RunListItem[]>([]);
   const [prompt, setPrompt] = useState("");
@@ -86,7 +90,13 @@ export function Builder() {
       setHistory([...runs].reverse());
       setRunId((current) => current ?? runs[0]?.run_id ?? null);
       const built = runs.find((entry) => entry.title);
-      if (built) api.listDashboards().then((rows) => setKnownSlug(rows.find((row) => row.thread_id === thread)?.slug ?? null)).catch(() => undefined);
+      if (built) {
+        api.listDashboards().then((rows) => {
+          const found = rows.find((row) => row.thread_id === thread) ?? null;
+          setSheet(found);
+          setKnownSlug(found?.slug ?? null);
+        }).catch(() => undefined);
+      }
     }).catch(() => undefined);
   }, []);
 
@@ -104,7 +114,7 @@ export function Builder() {
     try {
       // The agent can't see inside the dashboard, so it's told what the person is looking at.
       const context = selection.length ? `${CONTEXT_MARK} ${describeSelection(selection)}.)` : "";
-      const started = await api.startRun(text + context, threadId, requireApproval);
+      const started = await api.startRun(text + context, threadId, requireApproval, threadId ? null : project);
       setThreadId(started.thread_id);
       setRunId(started.run_id);
       setPrompt("");
@@ -128,7 +138,7 @@ export function Builder() {
   }
 
   function startOver() {
-    setThreadId(null); setRunId(null); setKnownSlug(null); setSelection([]); setError(null); setHistory([]); setWide(false);
+    setThreadId(null); setRunId(null); setKnownSlug(null); setSheet(null); setProject(null); setSelection([]); setError(null); setHistory([]); setWide(false);
     router.replace("/builder");
   }
 
@@ -136,7 +146,7 @@ export function Builder() {
     return (
       <div className="h-full">
         {error && <div className="p-4"><ErrorState message={error} /></div>}
-        <Welcome onSend={send} requireApproval={requireApproval} setRequireApproval={setRequireApproval} />
+        <Welcome onSend={send} requireApproval={requireApproval} setRequireApproval={setRequireApproval} project={project} setProject={setProject} />
       </div>
     );
   }
@@ -233,6 +243,11 @@ export function Builder() {
 
       <section className="flex min-h-0 min-w-0 flex-col" aria-label="Dashboard">
         <header className="flex h-14 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4">
+          {sheet && (
+            <Link href={`/projects/${sheet.project_slug}?sheet=${sheet.slug}`} className="shrink-0 text-xs font-medium text-muted-foreground hover:text-foreground">
+              {sheet.project_name} /
+            </Link>
+          )}
           <h1 className="min-w-0 truncate text-sm font-semibold tracking-tight">{title ?? "New dashboard"}</h1>
           <Status status={status} hasDashboard={Boolean(slug)} warnings={result?.warnings?.length ?? 0} />
           {selection.map((filter) => (

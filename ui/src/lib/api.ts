@@ -105,7 +105,20 @@ export type DashboardRow = {
   summary: string;
   updated_at: string;
   created_by: string;
+  sheet_name: string;
+  project_slug: string;
+  project_name: string;
+};
+export type ProjectSheet = { slug: string; thread_id: string; name: string; title: string; summary: string; updated_at: string };
+export type Project = {
+  slug: string;
+  name: string;
+  description: string;
+  created_by: string;
   shared: boolean;
+  updated_at: string;
+  can_edit: boolean;
+  sheets: ProjectSheet[];
 };
 export type EmbedInfo = {
   slug: string;
@@ -187,18 +200,28 @@ export const api = {
   logout: () => request("/api/auth/logout", { method: "POST" }),
   me: () => request<User>("/api/auth/me"),
   config: () => request<Config>("/api/config"),
-  startRun: (prompt: string, threadId: string | null, requireApproval: boolean) =>
+  startRun: (prompt: string, threadId: string | null, requireApproval: boolean, project: string | null) =>
     request<{ run_id: string; thread_id: string }>("/api/runs", {
       method: "POST",
-      body: JSON.stringify({ prompt, thread_id: threadId, require_approval: requireApproval }),
+      body: JSON.stringify({ prompt, thread_id: threadId, require_approval: requireApproval, project }),
     }),
   resumeRun: (runId: string, body: { plan?: Plan; rejected?: boolean; reason?: string; answer?: string }) =>
     request<{ run_id: string; thread_id: string }>(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify(body) }),
   getRun: (runId: string) => request<Run>(`/api/runs/${runId}`),
   listRuns: (threadId?: string) => request<RunListItem[]>(`/api/runs${threadId ? `?thread_id=${threadId}` : ""}`),
   listDashboards: () => request<DashboardRow[]>("/api/dashboards"),
-  shareDashboard: (slug: string, shared: boolean) =>
-    request(`/api/dashboards/${slug}`, { method: "PATCH", body: JSON.stringify({ shared }) }),
+  projects: () => request<Project[]>("/api/projects"),
+  project: (slug: string) => request<Project>(`/api/projects/${slug}`),
+  createProject: (name: string, description: string) =>
+    request<Project>("/api/projects", { method: "POST", body: JSON.stringify({ name, description }) }),
+  changeProject: (slug: string, body: { name?: string; description?: string; shared?: boolean }) =>
+    request<Project>(`/api/projects/${slug}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteProject: (slug: string) => request(`/api/projects/${slug}`, { method: "DELETE" }),
+  reorderSheets: (slug: string, sheets: string[]) =>
+    request<Project>(`/api/projects/${slug}/order`, { method: "PUT", body: JSON.stringify({ sheets }) }),
+  changeSheet: (slug: string, sheet: string, name: string) =>
+    request<Project>(`/api/projects/${slug}/sheets/${sheet}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deleteSheet: (slug: string, sheet: string) => request(`/api/projects/${slug}/sheets/${sheet}`, { method: "DELETE" }),
   embed: (slug: string) => request<EmbedInfo>(`/api/dashboards/${slug}/embed`),
   chartPreview: (chartId: number) => request<ChartPreview>(`/api/charts/${chartId}/preview`),
   sources: () => request<SourceRow[]>("/api/sources"),

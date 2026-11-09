@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 
+import { Markdown } from "@/components/markdown";
 import { ErrorState, Loading, PageHeader } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,8 @@ export default function SkillPage({ params }: { params: Promise<{ slug: string }
           )}
         </div>
       </PageHeader>
+
+      <Card><CardHeader><CardTitle>Guide</CardTitle></CardHeader><CardContent><Markdown>{skill.guide}</Markdown></CardContent></Card>
 
       <Card>
         <CardHeader><CardTitle>Metrics</CardTitle></CardHeader>
@@ -80,9 +83,8 @@ export default function SkillPage({ params }: { params: Promise<{ slug: string }
         </Card>
       </div>
 
-      <Card><CardHeader><CardTitle>Guide</CardTitle></CardHeader><CardContent><p className="whitespace-pre-wrap text-sm leading-relaxed">{skill.guide}</p></CardContent></Card>
       <Card><CardHeader><CardTitle>Tested examples</CardTitle></CardHeader><CardContent><pre className="overflow-auto text-[11px]">{skill.examples}</pre></CardContent></Card>
-      <Card><CardHeader><CardTitle>Changelog</CardTitle></CardHeader><CardContent><pre className="whitespace-pre-wrap text-xs">{skill.changelog}</pre></CardContent></Card>
+      <Card><CardHeader><CardTitle>Changelog</CardTitle></CardHeader><CardContent><Markdown>{skill.changelog}</Markdown></CardContent></Card>
     </div>
   );
 }

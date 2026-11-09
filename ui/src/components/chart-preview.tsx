@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import type { ChartPreview as Preview } from "@/lib/api";
 import { escapeHtml, formatAxis, formatTime, formatValue } from "@/lib/format";
 
-const KPI_TYPES = new Set(["big_number_total", "big_number"]);
+const KPI_TYPES = new Set(["big_number_total", "big_number", "gauge_chart", "bullet"]);
+const LINES = new Set(["echarts_timeseries_line", "echarts_timeseries_smooth", "echarts_timeseries_step", "echarts_area", "echarts_timeseries_scatter"]);
 const MAX_SERIES = 8;
 
 function colors() {
@@ -157,8 +158,10 @@ export function ChartPreview({ preview }: { preview: Preview }) {
   if (KPI_TYPES.has(preview.viz)) {
     return <p className="truncate text-[28px] font-semibold tracking-tight">{formatValue(preview.rows[0]?.[metricColumn(preview)], preview.format)}</p>;
   }
-  if (preview.viz === "table") return <PreviewTable preview={preview} />;
-  return <Plot preview={preview} />;
+  // The rest are drawn properly in a moment, when the dashboard takes over. Until then a table
+  // shows the real numbers, which is more honest than a rough imitation of the chart.
+  if (preview.viz === "pie" || preview.viz === "echarts_timeseries_bar" || LINES.has(preview.viz)) return <Plot preview={preview} />;
+  return <PreviewTable preview={preview} />;
 }
 
 export const isKpi = (viz: string) => KPI_TYPES.has(viz);

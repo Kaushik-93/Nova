@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, Database, LayoutDashboard, LogOut, Sparkles, Users } from "lucide-react";
+import { BookOpen, Database, FolderOpen, LogOut, Sparkles, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 
 const LINKS: { href: string; label: string; icon: typeof Sparkles; roles: Role[] }[] = [
   { href: "/builder", label: "Build", icon: Sparkles, roles: ["admin", "analyst"] },
-  { href: "/dashboards", label: "Dashboards", icon: LayoutDashboard, roles: ["admin", "analyst", "viewer"] },
+  { href: "/projects", label: "Projects", icon: FolderOpen, roles: ["admin", "analyst", "viewer"] },
   { href: "/skills", label: "Skills", icon: BookOpen, roles: ["admin"] },
   { href: "/sources", label: "Sources", icon: Database, roles: ["admin"] },
   { href: "/users", label: "People", icon: Users, roles: ["admin"] },

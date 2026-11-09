@@ -105,8 +105,47 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS shared_tables text[] NOT NULL DEFAU
 
 UPDATE sources SET kind = 'mysql' WHERE dialect = 'mysql' AND kind = 'postgres';
 
-ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS shared boolean NOT NULL DEFAULT false;
 ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS catalogs text[] NOT NULL DEFAULT '{}';
 
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'dashboard';
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS dashboard_key text;
+
+-- A project holds sheets, and each sheet is one row in dashboards.
+CREATE TABLE IF NOT EXISTS projects (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug        text NOT NULL UNIQUE,
+    name        text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    created_by  text NOT NULL,
+    shared      boolean NOT NULL DEFAULT false,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS project_id uuid REFERENCES projects ON DELETE RESTRICT;
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS sheet_name text;
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS position integer NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id uuid REFERENCES projects ON DELETE SET NULL;
+
+-- Sharing used to be on each dashboard, and is now on a project, so shared and unshared dashboards
+-- must not end up together: everything in a shared project is shared. Each owner gets one project
+-- for each, which leaves everyone seeing exactly what they saw before.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+               AND table_name = 'dashboards' AND column_name = 'shared') THEN
+        INSERT INTO projects (slug, name, created_by, shared)
+        SELECT DISTINCT 'earlier-' || substr(md5(created_by), 1, 8) || CASE WHEN shared THEN '-shared' ELSE '' END,
+               CASE WHEN shared THEN 'Shared dashboards' ELSE 'Earlier dashboards' END, created_by, shared
+        FROM dashboards
+        ON CONFLICT (slug) DO NOTHING;
+
+        UPDATE dashboards d SET project_id = p.id, sheet_name = d.title, position = r.place
+        FROM projects p, (SELECT slug, row_number() OVER (PARTITION BY created_by, shared ORDER BY created_at) - 1 AS place
+                          FROM dashboards) r
+        WHERE r.slug = d.slug
+          AND p.slug = 'earlier-' || substr(md5(d.created_by), 1, 8) || CASE WHEN d.shared THEN '-shared' ELSE '' END;
+
+        ALTER TABLE dashboards DROP COLUMN shared;
+    END IF;
+END $$;

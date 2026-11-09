@@ -17,6 +17,7 @@ from agent.harness.budgets import BudgetLimits, RunBudget
 from agent.harness.executor import CostLimits, SqlExecutor
 from agent.harness.guardrails import SqlPolicy
 from agent.harness.middleware import EventSink
+from agent.projects import project_for_new_sheet
 from agent.tools.skill_store import SkillStore
 from agent.tools.sources import Source, list_sources
 from agent.tools.superset_client import Dashboard, SupersetClient
@@ -31,6 +32,7 @@ class BuildState:
     dashboard_key: str
     thread_id: str = ""
     dashboard: Dashboard | None = None
+    project_id: str | None = None
     catalogs: set[str] = field(default_factory=set)
     charts: dict[int, ChartSpec] = field(default_factory=dict)
     datasets: dict[str, int] = field(default_factory=dict)
@@ -83,19 +85,24 @@ class Runtime:
         """Record the dashboard as soon as it exists, so it can be shown while checks run."""
         state = self.state
         with self.pool.connection() as conn:
+            project = project_for_new_sheet(conn, sheet_slug=state.dashboard_key, requested=state.project_id,
+                                            title=state.dashboard.dashboard_title, owner=self.context.user_id)
             conn.execute(
-                """INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, summary, created_by, catalogs)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, summary, created_by, catalogs,
+                                          project_id, sheet_name, position)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           (SELECT COALESCE(MAX(position) + 1, 0) FROM dashboards WHERE project_id = %s))
                    ON CONFLICT (slug) DO UPDATE SET embed_uuid = EXCLUDED.embed_uuid, title = EXCLUDED.title,
                        summary = COALESCE(NULLIF(EXCLUDED.summary, ''), dashboards.summary), updated_at = now(),
                        catalogs = ARRAY(SELECT DISTINCT unnest(dashboards.catalogs || EXCLUDED.catalogs))""",
                 (state.dashboard_key, state.thread_id, state.dashboard.id, state.embed_uuid,
-                 state.dashboard.dashboard_title, state.summary, self.context.user_id, sorted(state.catalogs)))
+                 state.dashboard.dashboard_title, state.summary, self.context.user_id, sorted(state.catalogs),
+                 project, state.dashboard.dashboard_title, project))
 
 
 def make_runtime(settings: Settings, pool: ConnectionPool, model: BaseChatModel, *, context: RunContext,
                  dashboard_key: str, thread_id: str = "", sink: EventSink | None = None,
-                 access: UserAccess | None = None) -> Runtime:
+                 access: UserAccess | None = None, project_id: str | None = None) -> Runtime:
     """`access=None` is the command line and tests. The API always passes the user's access."""
     audit = AuditLog(pool)
     store = SkillStore(settings.nova_skills_dir, pool)
@@ -119,5 +126,5 @@ def make_runtime(settings: Settings, pool: ConnectionPool, model: BaseChatModel,
                                       max_wall_seconds=settings.nova_max_wall_seconds,
                                       max_sql_queries=settings.nova_max_sql_queries)),
         policy=build_policy(visible, access, store),
-        state=BuildState(dashboard_key=dashboard_key, thread_id=thread_id),
+        state=BuildState(dashboard_key=dashboard_key, thread_id=thread_id, project_id=project_id),
     )

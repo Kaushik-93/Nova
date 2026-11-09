@@ -21,7 +21,7 @@ function SignedIn({ children }: { children: ReactNode }) {
 
   useEffect(() => { api.me().then(setUser).catch((cause) => setError(cause.message)); }, []);
   const viewerOnBuilder = user?.role === "viewer" && path.startsWith("/builder");
-  useEffect(() => { if (viewerOnBuilder) router.replace("/dashboards"); }, [viewerOnBuilder, router]);
+  useEffect(() => { if (viewerOnBuilder) router.replace("/projects"); }, [viewerOnBuilder, router]);
 
   const auth = useMemo(() => user && {
     user,

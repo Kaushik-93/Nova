@@ -39,7 +39,9 @@ class CreateChartInput(BaseModel):
 
 
 class Slot(BaseModel):
-    chart_id: int
+    chart_id: int | None = None
+    text: str | None = Field(default=None, description="Instead of a chart: markdown shown as written, for a heading "
+                                                       "or a note. It's static, so don't put figures in it")
     width: int = Field(ge=1, le=12, description="Columns out of 12; each row adds up to at most 12")
     height: int = Field(default=50, ge=8)
 
@@ -123,15 +125,15 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         titles = {c.id: c.slice_name for c in superset.dashboard_charts(state.dashboard.id)} if state.dashboard else {}
         slots = []
         for row in rows:
-            charts = [superset.get_chart(slot.chart_id) for slot in row]
-            for indexes in wrap_row([chart.viz_type for chart in charts]):
+            charts = [superset.get_chart(slot.chart_id) if slot.chart_id else None for slot in row]
+            for indexes in wrap_row([chart.viz_type if chart else None for chart in charts]):
                 chosen = [row[index] for index in indexes]
                 widths = fill_row([slot.width for slot in chosen])
                 # A row of headline numbers stays compact, whatever height was asked for.
-                only_kpis = all(charts[index].viz_type in KPI_TYPES for index in indexes)
-                slots.append([ChartSlot(chart_id=slot.chart_id, width=width,
+                only_kpis = all(charts[index] and charts[index].viz_type in KPI_TYPES for index in indexes)
+                slots.append([ChartSlot(chart_id=slot.chart_id, text=slot.text, width=width,
                                         height=KPI_ROW_HEIGHT if only_kpis else slot.height,
-                                        title=titles.get(slot.chart_id) or charts[index].slice_name)
+                                        title=titles.get(slot.chart_id) or (charts[index].slice_name if charts[index] else ""))
                               for index, slot, width in zip(indexes, chosen, widths)])
         return slots
 
@@ -166,6 +168,9 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         if data.row_count == 0:
             return f"chart_id={chart.id} was created but returned no rows. Check its filters and time range."
         runtime.emit("chart_ready", chart_id=chart.id, key=spec.key, title=spec.title, viz=spec.viz.value)
+        if data.row_count >= spec.row_limit:
+            return (f"chart_id={chart.id}, stopped at its row_limit of {spec.row_limit}, so it may not show everything. "
+                    "Aggregate the dataset further, or raise row_limit.")
         return f"chart_id={chart.id}, {data.row_count} rows"
 
     def build_filters(filters: list[SelectFilterInput], time_filter: bool) -> list[SelectFilter | TimeFilter]:
@@ -178,7 +183,8 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
         """Create the dashboard with its layout and filters. Create the charts first."""
         for row in rows:
             for slot in row:
-                require_own_chart(slot.chart_id)
+                if slot.chart_id:
+                    require_own_chart(slot.chart_id)
         for item in filters or []:
             require_own_dataset(item.dataset_id)
         state.dashboard = superset.ensure_dashboard(slug=state.dashboard_key, title=title, rows=to_slots(rows),
@@ -225,7 +231,8 @@ def make_builder_tools(runtime: Runtime) -> dict[str, BaseTool]:
             return "FAILED: there's no dashboard yet; use superset_create_dashboard."
         for row in rows:
             for slot in row:
-                require_own_chart(slot.chart_id)
+                if slot.chart_id:
+                    require_own_chart(slot.chart_id)
         state.dashboard = superset.ensure_dashboard(slug=state.dashboard_key, rows=to_slots(rows),
                                                     title=title or state.dashboard.dashboard_title)
         runtime.emit("dashboard_updated", slug=state.dashboard_key)
