@@ -13,8 +13,11 @@ from agent.harness.audit import AuditLog, RunContext
 from agent.harness.budgets import BudgetLimits, RunBudget
 from agent.harness.executor import SqlExecutor
 from agent.tools.profiler import ColumnRole, GotchaKind, Profiler, diff_shapes, shape_of
-from agent.tools.skill_store import (DefinitionStatus, Freshness, Metric, SemanticLayer, SkillStatus, SkillStore,
-                                     refresh)
+from agent.semantic.access import Tenancy
+from agent.semantic.model import Cube, DataModel, Dimension, Measure, MemberMeta, Proposal, Status
+from agent.semantic.query import Example, SemanticQuery
+from agent.semantic.review import merge_reviewed
+from agent.tools.skill_store import Freshness, SkillStatus, SkillStore, refresh
 
 pytestmark = pytest.mark.integration
 
@@ -219,15 +222,20 @@ def source_id(pool):
         conn.execute("DELETE FROM sources WHERE id = %s", (source,))
 
 
-REVENUE = Metric(label="Revenue", sql="SUM(i.quantity * i.unit_price_cents) / 100.0",
-                 base="shop.order_items i JOIN shop.orders o ON o.order_id = i.order_id",
-                 filters=["o.status <> 'cancelled'"], unit="USD")
+REVENUE = Measure(name="revenue", type="sum", sql="{CUBE}.quantity * {CUBE}.unit_price_cents / 100.0",
+                  meta=MemberMeta(unit="USD"))
+EXAMPLE = Example(question="Revenue?", query=SemanticQuery(measures=["demo_shop__items.revenue"]))
+
+
+def shop_model(revenue: Measure = REVENUE) -> DataModel:
+    return DataModel(cubes=[Cube(name="demo_shop__items", sql_table="demo_shop.shop.order_items", measures=[revenue],
+                                 dimensions=[Dimension(name="id", sql="{CUBE}.order_item_id", type="number",
+                                                       primary_key=True)])])
 
 
 def write(store, source_id, profile, slug, **overrides):
     values = dict(source_id=source_id, slug=slug, description="Use for shop questions.", body="# Guide",
-                  profile=profile, semantic_layer=SemanticLayer(metrics={"revenue": REVENUE}), examples_sql="SELECT 1",
-                  change="Initial profile.")
+                  profile=profile, model=shop_model(), tenancy=Tenancy(), examples=[EXAMPLE], change="Initial profile.")
     return store.write(**(values | overrides))
 
 
@@ -241,8 +249,11 @@ def test_a_skill_writes_all_its_files_and_is_tracked(store, source_id, shop):
 
     assert front.version == 1
     assert front.status is SkillStatus.DRAFT
-    assert {p.name for p in store.path(slug).iterdir()} == {"SKILL.md", "schema.json", "metrics.yaml",
-                                                            "examples.sql", "CHANGELOG.md"}
+    assert {str(p.relative_to(store.path(slug))) for p in store.path(slug).rglob("*") if p.is_file()} == {
+        "SKILL.md", "schema.json", "model/" + slug + ".yml", "model/access.json", "examples.json", "CHANGELOG.md"}
+    assert store.read_model(slug) == shop_model()
+    assert store.read_examples(slug) == [EXAMPLE]
+    assert store.read_access(slug) == {"catalog": "demo_shop", "cubes": {"demo_shop__items": {}}}
     tracked = store.tracked(slug)
     assert tracked["version"] == 1
     assert tracked["schema_fingerprint"] == shop.fingerprint
@@ -259,19 +270,40 @@ def test_a_missing_skill_is_reported(store, shop):
     assert store.check_freshness("nope", shape_of(shop)).status is Freshness.MISSING
 
 
-def test_a_new_version_keeps_reviewed_metrics_and_flags_the_proposal(store, source_id, shop):
+def test_a_new_version_keeps_reviewed_measures_and_flags_the_proposal(store, source_id, shop):
     slug = fresh_slug()
-    reviewed = REVENUE.model_copy(update={"status": DefinitionStatus.REVIEWED, "reviewed_by": "sam",
-                                          "sql": "SUM(net_cents) / 100.0"})
-    write(store, source_id, shop, slug, semantic_layer=SemanticLayer(metrics={"revenue": reviewed}))
-    second = write(store, source_id, shop, slug, change="Re-profiled.")
+    reviewed = REVENUE.model_copy(update={"sql": "{CUBE}.net_cents / 100.0",
+                                          "meta": MemberMeta(status=Status.REVIEWED, reviewed_by="sam")})
+    write(store, source_id, shop, slug, model=shop_model(reviewed))
+    merged, proposals = merge_reviewed(store.read_model(slug), shop_model())
+    second = write(store, source_id, shop, slug, model=merged, proposals=proposals, change="Re-profiled.")
 
     assert second.version == 2
-    layer = store.read_semantic_layer(slug)
-    assert layer.metrics["revenue"].sql == "SUM(net_cents) / 100.0"
-    assert layer.proposed["revenue"].sql == REVENUE.sql
+    assert store.read_model(slug).cube("demo_shop__items").member("revenue").sql == "{CUBE}.net_cents / 100.0"
+    assert [p.member.sql for p in store.read_proposals(slug)] == [REVENUE.sql]
     changelog = (store.path(slug) / "CHANGELOG.md").read_text()
     assert "## v1" in changelog and "## v2" in changelog
+
+
+def test_proposals_wait_for_a_person(store, source_id, shop):
+    slug = fresh_slug()
+    write(store, source_id, shop, slug)
+    better = REVENUE.model_copy(update={"sql": "{CUBE}.quantity * {CUBE}.unit_price_cents / 100.0 - 1"})
+    store.propose(slug, Proposal(cube="demo_shop__items", member=better, reason="the user said so"))
+    assert store.read_model(slug).cube("demo_shop__items").member("revenue").sql == REVENUE.sql
+
+    store.decide(slug, 0, accepted=True, reviewed_by="kim", tenancy=Tenancy())
+    accepted = store.read_model(slug).cube("demo_shop__items").member("revenue")
+    assert (accepted.sql, accepted.meta.status, accepted.meta.reviewed_by) == (better.sql, Status.REVIEWED, "kim")
+    assert store.read_proposals(slug) == []
+
+
+def test_changing_tenancy_rewrites_the_manifest(store, source_id, shop):
+    slug = fresh_slug()
+    write(store, source_id, shop, slug)
+    assert store.apply_tenancy(slug, Tenancy(column="region_id"))["cubes"] == {"demo_shop__items": {}}
+    model_text = store.model_file(slug).read_text()
+    assert "nova_tenant" not in model_text  # order_items has no region_id, so nothing can limit it
 
 
 @pytest.fixture
@@ -301,7 +333,7 @@ def test_a_real_schema_change_makes_a_skill_stale_and_refresh_catches_up(store, 
     assert report.diff.changed_tables == ["shop.refunds"]
 
     front, diff = refresh(store, profiler, slug=slug, catalog="demo_shop", source_id=source_id,
-                          description="Use for shop questions.", body="# Guide", examples_sql="SELECT 1")
+                          description="Use for shop questions.", body="# Guide", tenancy=Tenancy())
 
     assert front.version == 2
     assert not diff.is_empty
@@ -313,15 +345,15 @@ def test_a_real_schema_change_makes_a_skill_stale_and_refresh_catches_up(store, 
     assert table(updated, "orders").sample_rows == orders_before.sample_rows
 
 
-def test_approving_marks_the_skill_and_its_metrics_reviewed(store, source_id, shop):
+def test_approving_marks_the_skill_and_its_definitions_reviewed(store, source_id, shop):
     slug = fresh_slug()
     write(store, source_id, shop, slug)
 
-    approved = store.approve(slug, reviewed_by="sam")
+    approved = store.approve(slug, reviewed_by="sam", tenancy=Tenancy())
 
     assert approved.status is SkillStatus.REVIEWED
     assert approved.version == 2
-    assert store.read_semantic_layer(slug).metrics["revenue"].status is DefinitionStatus.REVIEWED
+    assert store.read_model(slug).cube("demo_shop__items").member("revenue").meta.status is Status.REVIEWED
     assert store.tracked(slug)["reviewed_by"] == "sam"
 
 
@@ -329,6 +361,6 @@ def test_refreshing_a_fresh_skill_does_nothing(store, source_id, executor, shop)
     slug = fresh_slug()
     write(store, source_id, shop, slug)
     front, diff = refresh(store, make_profiler(executor), slug=slug, catalog="demo_shop", source_id=source_id,
-                          description="d", body="b", examples_sql="SELECT 1")
+                          description="d", body="b", tenancy=Tenancy())
     assert front.version == 1
     assert diff.is_empty

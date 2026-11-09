@@ -10,6 +10,7 @@ registry, rather than from memory.
 |---|---|---|
 | Apache Superset | `apache/superset:6.1.0` | Latest stable. 7.0.0 is at rc2. Extended by `infra/superset/Dockerfile`. |
 | Trino | `trinodb/trino:484` | Java 25. |
+| Cube | `cubejs/cube:v1.8.13` | Released 2026-10-25, the newest release at least two weeks old on 2026-11-09. Node 24. Checked in the image's source: `queryRewrite` runs for REST `load` and `sql` and for the SQL API (`sqlApiLoad`), after Cube's own access policies; `checkAuth(req, token)` sets `req.securityContext`; a `.yml` model containing `{{`, `}}`, `{%` or `%}` anywhere is rendered as Jinja; every `sql` field is a Python f-string. |
 | Dex | `ghcr.io/dexidp/dex:v2.46.1` | A real OpenID Connect provider, used only by the tests. |
 | Postgres | `postgres:17.11-alpine` | Metadata and demo source. |
 | Redis | `redis:8.8.4-alpine` | |

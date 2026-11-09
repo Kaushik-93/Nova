@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from agent.api import auth, projects as project_routes, sources as source_routes, users
+from agent.api import auth, projects as project_routes, semantic as semantic_routes, sources as source_routes, users
 from agent.api.auth import LoginThrottle, User, check_secret, create_sso_client, current_user, ensure_admin, require_admin, require_builder
 from agent.api.runs import RunManager
 from agent.api.timing import summarise
@@ -31,7 +31,8 @@ from agent.harness.logs import configure_logging
 from agent.harness.validators import chart_dataset_id
 from agent.llm import build_model
 from agent.projects import can_edit, can_view_sheet, load_projects, project_of_sheet
-from agent.tools.skill_store import SkillStore, parse_frontmatter
+from agent.semantic.client import CubeClient
+from agent.tools.skill_store import SkillStore
 from agent.tools.sources import list_sources
 from agent.tools.superset_client import SupersetClient
 from agent.tools.superset_payloads import CHART_KEY_PREFIX
@@ -67,6 +68,7 @@ class Services:
         self.skills = SkillStore(settings.nova_skills_dir, self.pool)
         self.superset = SupersetClient(settings.superset_url, settings.superset_admin_user,
                                        settings.superset_admin_password)
+        self.cube = CubeClient(settings.cube_url, settings.cubejs_api_secret)
         self.audit = AuditLog(self.pool)
         self.executor = SqlExecutor(settings.trino_url, self.audit)
         self.model = build_model(settings)
@@ -89,6 +91,7 @@ class Services:
     def close(self) -> None:
         self.runs.close()
         self.superset.close()
+        self.cube.close()
         self.pool.close()
         self.graph_pool.close()
 
@@ -113,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router)
     app.include_router(project_routes.router)
     app.include_router(source_routes.router)
+    app.include_router(semantic_routes.router)
 
     @app.exception_handler(NovaError)
     async def nova_error(request: Request, error: NovaError) -> JSONResponse:
@@ -271,34 +275,6 @@ def create_app() -> FastAPI:
                 "x_axis": params.get("x_axis"), "groupby": params.get("groupby") or [],
                 "time_grain": params.get("time_grain_sqla"),
                 "format": params.get("y_axis_format") or params.get("number_format")}
-
-    # --- Skills ---------------------------------------------------------------
-
-    @app.get("/api/skills/{slug}")
-    def skill(slug: str, request: Request, user: User = Depends(require_admin)) -> dict[str, Any]:
-        store: SkillStore = services(request).skills
-        if not store.exists(slug):
-            raise NotFound(f"no skill named {slug}")
-        directory = store.path(slug)
-        front, body = parse_frontmatter((directory / "SKILL.md").read_text())
-        layer = store.read_semantic_layer(slug)
-        profile = store.read_profile(slug)
-        return {"name": front.name, "description": front.description, "version": front.version, "status": front.status.value,
-                "generated_at": front.generated_at, "reviewed_by": front.reviewed_by, "guide": body,
-                "metrics": {key: metric.model_dump(mode="json") for key, metric in layer.metrics.items()},
-                "proposed": {key: metric.model_dump(mode="json") for key, metric in layer.proposed.items()},
-                "gotchas": [gotcha.model_dump(mode="json") for gotcha in profile.gotchas],
-                "tables": [{"name": t.qualified, "rows": t.row_count} for t in profile.tables],
-                "examples": (directory / "examples.sql").read_text(),
-                "changelog": (directory / "CHANGELOG.md").read_text()}
-
-    @app.post("/api/skills/{slug}/approve")
-    def approve_skill(slug: str, request: Request, user: User = Depends(require_admin)) -> dict[str, Any]:
-        store: SkillStore = services(request).skills
-        if not store.exists(slug):
-            raise NotFound(f"no skill named {slug}")
-        front = store.approve(slug, reviewed_by=user.email)
-        return {"name": front.name, "version": front.version, "status": front.status.value}
 
     return app
 

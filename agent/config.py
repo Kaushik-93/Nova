@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     superset_admin_user: str
     superset_admin_password: str
     trino_url: str = "http://trino:8080"
+    cube_url: str = "http://cube:4000"
+    cubejs_api_secret: str = ""
     database_url: str = ""
 
     nova_skills_dir: str = "skills"

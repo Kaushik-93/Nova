@@ -148,8 +148,8 @@ def test_guest_rules_refuse_sources_limited_by_different_columns():
 def skills_dir(tmp_path: Path) -> str:
     for slug in ("rental", "shop"):
         folder = tmp_path / "skills" / slug
-        folder.mkdir(parents=True)
-        for name in ("SKILL.md", "metrics.yaml", "examples.sql", "schema.json"):
+        (folder / "model").mkdir(parents=True)
+        for name in ("SKILL.md", f"model/{slug}.yml", "model/access.json", "examples.json", "schema.json"):
             (folder / name).write_text(f"{slug} {name}")
     return str(tmp_path / "skills")
 
@@ -166,7 +166,8 @@ def test_skills_view_leaves_out_ungranted_sources(skills_dir):
 def test_skills_view_hides_measured_values_from_a_tenant_user(skills_dir):
     """schema.json holds values measured across every tenant."""
     view = make_skills_view([rental()], user(r=["1"]), skills_dir)
-    assert files_in(view) == {"rental/SKILL.md", "rental/metrics.yaml", "rental/examples.sql"}
+    assert files_in(view) == {"rental/SKILL.md", "rental/model/rental.yml", "rental/model/access.json",
+                              "rental/examples.json"}
 
 
 def test_skills_view_keeps_measured_values_for_a_whole_source_grant(skills_dir):

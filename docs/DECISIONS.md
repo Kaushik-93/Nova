@@ -370,3 +370,43 @@ Superset holds its own copy, encrypted with its secret key, because `/api/v1/dat
 
 An administrator sets it on the People page. Reading it from an identity provider claim would need
 to know how that provider names tenants, so it waits for a real provider's configuration.
+
+## D-056: The semantic layer is Cube
+
+Each source's skill holds a Cube data model (`model/<slug>.yml`) in place of `metrics.yaml`, and
+Cube Core runs in the stack over Trino. Every number now comes from one set of definitions that Cube
+applies, rather than SQL an agent was told to write the same way. Superset stays until native
+dashboards replace it; meanwhile `load_skill` shows the exact SQL Cube runs for each measure.
+
+## D-057: Nova's API is Cube's only client
+
+Cube publishes no port. For each request Nova signs a one-minute HS256 token holding the person's
+catalogs and tenant limits, built from the same grants as everything else. `cube.js` refuses any
+token that isn't signed, has no expiry, or carries no identity, and closes GraphQL and jobs.
+
+## D-058: Tenant limits are enforced by `queryRewrite`, from a manifest code writes
+
+Cube's own access policies take their values as template expressions, which we'd rather not rest
+security on. Instead Nova writes `model/access.json` from the source's tenancy settings, and
+`queryRewrite` refuses any cube not listed, in a catalog the person can't read, or, for someone
+limited to some tenants, neither carrying the hidden `nova_tenant` dimension nor holding shared data.
+It ANDs the tenant filter onto the query, so an `OR` written into a query can't widen it, and it
+refuses paths through joins and member expressions outright. It's the guard's rule, applied to cubes.
+The tenant dimension casts to varchar because Cube passes values as strings and Trino won't compare
+them with integers. A manifest or model is always written whole, by rename, because Cube reads them live.
+
+## D-059: A drafted model is checked before Cube sees it
+
+Cube sends a model's SQL to Trino without Nova's guard, treats every `sql` field as a Python
+f-string, and renders any file containing Jinja markers as a template. So a model drafted by a model
+is checked first (`agent/semantic/validate.py`): braces may only hold a reference, no text may look
+like Jinja, a cube's own SQL is one plain SELECT over its source that passes the guard with no
+subqueries, aggregates or windows, and member expressions are row-level with no tables. Only then is
+it compiled in Cube as a draft that only a token naming it can reach, and every measure, join, key,
+tenant limit and example is run. A many-to-one join that adds rows, or a primary key that isn't
+unique, is caught with plain SQL, because neither fails on its own: they silently inflate totals.
+
+## D-060: Certified means every member a query uses was reviewed
+
+Definitions start as inferred. A person approves them in the catalog, and from then on re-profiling
+only proposes changes. A draft can't mark its own definitions reviewed: they're reset on submission.

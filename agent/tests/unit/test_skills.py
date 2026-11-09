@@ -6,8 +6,9 @@ from deepagents.middleware.skills import _list_skills
 from agent.harness.errors import InvalidRequest
 from agent.tools.profiler import (ColumnProfile, ColumnRole, GotchaKind, TableProfile, classify_column, diff_shapes,
                                   find_gotchas, fingerprint)
-from agent.tools.skill_store import (DefinitionStatus, Metric, SemanticLayer, SkillFrontmatter, SkillStatus,
-                                     describe_change, merge_semantic_layers, parse_frontmatter, render_frontmatter,
+from agent.semantic.model import Cube, DataModel, Dimension, Measure, MemberMeta, Status
+from agent.semantic.review import accept, approve_all, certified, merge_reviewed
+from agent.tools.skill_store import (SkillFrontmatter, SkillStatus, describe_change, parse_frontmatter, render_frontmatter,
                                      skill_slug)
 
 SHAPE = {"shop.orders": {"id": "bigint", "status": "varchar"}, "shop.items": {"id": "bigint"}}
@@ -121,42 +122,67 @@ def test_deep_agents_really_loads_a_skill_we_write(tmp_path):
 
 # --- Reviewed definitions ----------------------------------------------------
 
-def metric(sql: str, status=DefinitionStatus.INFERRED) -> Metric:
-    return Metric(label="Revenue", sql=sql, base="shop.orders o", status=status)
+def revenue(sql: str, status=Status.INFERRED) -> Measure:
+    return Measure(name="revenue", type="sum", sql=sql, meta=MemberMeta(status=status, reviewed_by="sam" if status is Status.REVIEWED else None))
 
 
-def test_a_reviewed_metric_survives_a_different_proposal():
-    reviewed = metric("SUM(a) - SUM(refunds)", DefinitionStatus.REVIEWED)
-    merged = merge_semantic_layers(SemanticLayer(metrics={"revenue": reviewed}),
-                                   SemanticLayer(metrics={"revenue": metric("SUM(a)")}))
+def model(*measures: Measure, name: str = "shop__orders") -> DataModel:
+    return DataModel(cubes=[Cube(name=name, sql_table="shop.public.orders", measures=list(measures),
+                                 dimensions=[Dimension(name="id", sql="id", type="number", primary_key=True)])])
 
-    assert merged.metrics["revenue"] == reviewed
-    assert merged.proposed["revenue"].sql == "SUM(a)"
+
+def test_a_reviewed_measure_survives_a_different_proposal():
+    reviewed = revenue("{CUBE}.amount - {CUBE}.refunds", Status.REVIEWED)
+    merged, proposals = merge_reviewed(model(reviewed), model(revenue("{CUBE}.amount")))
+
+    assert merged.cube("shop__orders").member("revenue") == reviewed
+    assert [p.member.sql for p in proposals] == ["{CUBE}.amount"]
 
 
 def test_an_identical_proposal_raises_no_flag():
-    reviewed = metric("SUM(a)", DefinitionStatus.REVIEWED)
-    merged = merge_semantic_layers(SemanticLayer(metrics={"revenue": reviewed}),
-                                   SemanticLayer(metrics={"revenue": metric("SUM(a)")}))
-    assert merged.proposed == {}
+    reviewed = revenue("{CUBE}.amount", Status.REVIEWED)
+    _, proposals = merge_reviewed(model(reviewed), model(revenue("{CUBE}.amount")))
+    assert proposals == []
 
 
-def test_a_reviewed_metric_is_kept_when_the_proposal_omits_it():
-    reviewed = metric("SUM(a)", DefinitionStatus.REVIEWED)
-    merged = merge_semantic_layers(SemanticLayer(metrics={"revenue": reviewed}), SemanticLayer())
-    assert merged.metrics["revenue"] == reviewed
+def test_a_reviewed_measure_is_kept_when_the_draft_omits_it():
+    reviewed = revenue("{CUBE}.amount", Status.REVIEWED)
+    merged, _ = merge_reviewed(model(reviewed), model())
+    assert merged.cube("shop__orders").member("revenue") == reviewed
 
 
-def test_inferred_metrics_are_simply_replaced():
-    merged = merge_semantic_layers(SemanticLayer(metrics={"revenue": metric("OLD")}),
-                                   SemanticLayer(metrics={"revenue": metric("NEW")}))
-    assert merged.metrics["revenue"].sql == "NEW"
-    assert merged.proposed == {}
+def test_a_reviewed_measure_goes_with_its_cube():
+    """If the table is gone there's nothing for the definition to apply to."""
+    merged, _ = merge_reviewed(model(revenue("{CUBE}.amount", Status.REVIEWED)), model(name="shop__refunds"))
+    assert merged.cube("shop__orders") is None
 
 
-def test_earlier_proposals_are_not_lost():
-    current = SemanticLayer(proposed={"margin": metric("x")})
-    assert "margin" in merge_semantic_layers(current, SemanticLayer()).proposed
+def test_inferred_measures_are_simply_replaced():
+    merged, proposals = merge_reviewed(model(revenue("OLD")), model(revenue("NEW")))
+    assert merged.cube("shop__orders").member("revenue").sql == "NEW"
+    assert proposals == []
+
+
+def test_approving_marks_every_definition_reviewed_by_the_person():
+    approved = approve_all(model(revenue("{CUBE}.amount")), reviewer="sam")
+    member = approved.cube("shop__orders").member("revenue")
+    assert (member.meta.status, member.meta.reviewed_by) == (Status.REVIEWED, "sam")
+
+
+def test_an_accepted_proposal_becomes_reviewed():
+    from agent.semantic.model import Proposal
+    accepted = accept(model(revenue("OLD", Status.REVIEWED)),
+                      Proposal(cube="shop__orders", member=revenue("NEW"), reason="refunds"), reviewer="kim")
+    member = accepted.cube("shop__orders").member("revenue")
+    assert (member.sql, member.meta.status, member.meta.reviewed_by) == ("NEW", Status.REVIEWED, "kim")
+
+
+def test_a_query_is_certified_only_if_every_member_is_reviewed():
+    reviewed = approve_all(model(revenue("{CUBE}.amount")), reviewer="sam")
+    mixed = model(revenue("{CUBE}.amount", Status.REVIEWED), Measure(name="orders", type="count"))
+    assert certified(reviewed, ["shop__orders.revenue"])
+    assert not certified(mixed, ["shop__orders.revenue", "shop__orders.orders"])
+    assert not certified(reviewed, ["shop__orders.unknown"])
 
 
 # --- Heuristics --------------------------------------------------------------

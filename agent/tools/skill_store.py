@@ -1,10 +1,12 @@
 """Skills on disk, tracked in Postgres.
 
     skills/<slug>/
-      SKILL.md       frontmatter plus the guide the agent loads on demand
-      schema.json    the measured SourceProfile
-      metrics.yaml   the semantic layer
-      examples.sql   verified queries
+      SKILL.md             frontmatter plus the guide the agent loads on demand
+      schema.json          the measured SourceProfile
+      model/<slug>.yml     the semantic layer: a Cube data model, which Cube loads
+      model/access.json    who may read which cube, enforced by Cube (agent/semantic/access.py)
+      examples.json        business questions with the semantic queries that answer them, verified
+      proposals.json       changes to reviewed definitions, waiting for a person
       CHANGELOG.md
 
 Deep Agents only reads `name`, `description`, `license`, `compatibility`, `metadata`
@@ -27,6 +29,11 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
 from agent.harness.errors import InvalidRequest, NotFound
+from agent.semantic.access import Tenancy, apply_tenancy
+from agent.semantic.model import TENANT_DIMENSION, DataModel, Proposal, Proposals, write_atomically
+from agent.semantic.query import Example
+from agent.semantic.review import accept, approve_all, approve_member
+from agent.semantic.validate import render_checked
 from agent.tools.profiler import Profiler, SchemaDiff, Shape, SourceProfile, diff_shapes, fingerprint, shape_of
 
 MAX_DESCRIPTION = 1024
@@ -37,30 +44,6 @@ _FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 class SkillStatus(StrEnum):
     DRAFT = "draft"
     REVIEWED = "reviewed"
-
-
-class DefinitionStatus(StrEnum):
-    INFERRED = "inferred"
-    REVIEWED = "reviewed"
-
-
-class Metric(BaseModel):
-    label: str
-    sql: str
-    base: str = Field(description="FROM and JOIN clause the expression applies to")
-    filters: list[str] = Field(default_factory=list)
-    unit: str | None = None
-    description: str | None = None
-    status: DefinitionStatus = DefinitionStatus.INFERRED
-    reviewed_by: str | None = None
-
-
-class SemanticLayer(BaseModel):
-    metrics: dict[str, Metric] = Field(default_factory=dict)
-    dimensions: dict[str, str] = Field(default_factory=dict)
-    joins: list[str] = Field(default_factory=list)
-    # A change to a reviewed metric waits here for a person to accept it.
-    proposed: dict[str, Metric] = Field(default_factory=dict)
 
 
 class SkillFrontmatter(BaseModel):
@@ -95,23 +78,6 @@ def skill_slug(value: str) -> str:
     if not slug:
         raise InvalidRequest(f"{value!r} doesn't make a usable skill name")
     return slug
-
-
-def merge_semantic_layers(current: SemanticLayer, incoming: SemanticLayer) -> SemanticLayer:
-    """Combine a fresh proposal with what exists. Reviewed definitions always win: if
-    the proposal differs, it goes to `proposed` for a person to accept or reject,
-    so re-profiling never silently overwrites a reviewed metric."""
-    merged = SemanticLayer(metrics=dict(incoming.metrics), dimensions=dict(incoming.dimensions),
-                           joins=list(incoming.joins), proposed=dict(current.proposed))
-    for key, metric in current.metrics.items():
-        if metric.status is not DefinitionStatus.REVIEWED:
-            continue
-        proposal = incoming.metrics.get(key)
-        merged.metrics[key] = metric
-        if proposal is not None and (proposal.sql, proposal.base, proposal.filters) != (
-                metric.sql, metric.base, metric.filters):
-            merged.proposed[key] = proposal
-    return merged
 
 
 def render_frontmatter(front: SkillFrontmatter) -> str:
@@ -165,22 +131,48 @@ class SkillStore:
     def read_profile(self, slug: str) -> SourceProfile:
         return SourceProfile.model_validate_json((self.path(slug) / "schema.json").read_text())
 
-    def read_semantic_layer(self, slug: str) -> SemanticLayer:
-        path = self.path(slug) / "metrics.yaml"
+    def model_file(self, slug: str) -> Path:
+        return self.path(slug) / "model" / f"{slug}.yml"
+
+    def read_model(self, slug: str) -> DataModel | None:
+        """The data model as drafted and reviewed, without the tenant dimension Nova adds."""
+        path = self.model_file(slug)
         if not path.is_file():
-            return SemanticLayer()
-        return SemanticLayer.model_validate(yaml.safe_load(path.read_text()) or {})
+            return None
+        model = DataModel.from_yaml(path.read_text())
+        for cube in model.cubes:
+            cube.dimensions = [d for d in cube.dimensions if d.name != TENANT_DIMENSION]
+        return model
+
+    def read_access(self, slug: str) -> dict[str, Any]:
+        path = self.path(slug) / "model" / "access.json"
+        return json.loads(path.read_text()) if path.is_file() else {"catalog": None, "cubes": {}}
+
+    def read_examples(self, slug: str) -> list[Example]:
+        path = self.path(slug) / "examples.json"
+        return [Example.model_validate(item) for item in json.loads(path.read_text())] if path.is_file() else []
+
+    def read_proposals(self, slug: str) -> list[Proposal]:
+        path = self.path(slug) / "proposals.json"
+        return Proposals.model_validate_json(path.read_text()).items if path.is_file() else []
+
+    def cube_names(self, *, excluding: str | None = None) -> set[str]:
+        """Cube names already used by other skills; Cube needs them unique across all of them."""
+        names = set()
+        for directory in self.root.iterdir() if self.root.is_dir() else []:
+            if directory.name != excluding and not directory.name.startswith(("_", ".")):
+                model = self.read_model(directory.name)
+                names |= {cube.name for cube in model.cubes} if model else set()
+        return names
 
     def write(self, *, source_id: str, slug: str, description: str, body: str, profile: SourceProfile,
-              semantic_layer: SemanticLayer, examples_sql: str, change: str,
-              reviewed_by: str | None = None) -> SkillFrontmatter:
-        """Write a skill, as a new version if it already exists. Reviewed metric
-        definitions survive, and a skill with any stays `reviewed`."""
+              model: DataModel, tenancy: Tenancy, examples: list[Example], change: str,
+              proposals: list[Proposal] = (), reviewed_by: str | None = None) -> SkillFrontmatter:
+        """Write a skill, as a new version if it already exists. `model` must already have been
+        verified, and merged with what people reviewed (agent/semantic/review.py). A skill with
+        reviewed definitions stays `reviewed`."""
         directory = self.path(slug)
-        exists = self.exists(slug)
-        previous = self.read_frontmatter(slug) if exists else None
-        merged = merge_semantic_layers(self.read_semantic_layer(slug), semantic_layer) if exists else semantic_layer
-
+        previous = self.read_frontmatter(slug) if self.exists(slug) else None
         keeps_review = previous is not None and previous.status is SkillStatus.REVIEWED
         front = SkillFrontmatter(
             name=slug, description=description, source_id=source_id, dialect=profile.dialect,
@@ -190,14 +182,44 @@ class SkillStore:
             reviewed_by=reviewed_by or (previous.reviewed_by if previous else None),
         )
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / SKILL_FILE).write_text(render_frontmatter(front) + body.rstrip() + "\n")
-        (directory / "schema.json").write_text(profile.model_dump_json(indent=2) + "\n")
-        (directory / "metrics.yaml").write_text(yaml.safe_dump(merged.model_dump(mode="json"), sort_keys=False))
-        (directory / "examples.sql").write_text(examples_sql.rstrip() + "\n")
-        with (directory / "CHANGELOG.md").open("a") as changelog:
-            changelog.write(f"## v{front.version} ({front.generated_at})\n\n{change.rstrip()}\n\n")
+        write_atomically(directory / SKILL_FILE, render_frontmatter(front) + body.rstrip() + "\n")
+        write_atomically(directory / "schema.json", profile.model_dump_json(indent=2) + "\n")
+        write_atomically(directory / "examples.json",
+                         json.dumps([e.model_dump(mode="json", exclude_defaults=True) for e in examples], indent=2) + "\n")
+        if proposals:
+            self._write_proposals(slug, [*self.read_proposals(slug), *proposals])
+        self._write_model(slug, model, profile=profile, tenancy=tenancy)
+        for old in ("metrics.yaml", "examples.sql"):  # the format before Cube
+            (directory / old).unlink(missing_ok=True)
+        self._log(slug, f"## v{front.version} ({front.generated_at})\n\n{change.rstrip()}")
         self._track(front, directory)
         return front
+
+    def _write_model(self, slug: str, model: DataModel, *, profile: SourceProfile, tenancy: Tenancy) -> None:
+        scoped, manifest = apply_tenancy(model, catalog=profile.catalog, profile=profile, tenancy=tenancy)
+        directory = self.path(slug) / "model"
+        # The manifest first: until the model's own file changes, Cube keeps the model it compiled.
+        write_atomically(directory / "access.json", json.dumps(manifest, indent=2) + "\n")
+        write_atomically(self.model_file(slug), render_checked(scoped))
+
+    def _write_proposals(self, slug: str, proposals: list[Proposal]) -> None:
+        write_atomically(self.path(slug) / "proposals.json", Proposals(items=proposals).model_dump_json(indent=2) + "\n")
+
+    def _log(self, slug: str, entry: str) -> None:
+        with (self.path(slug) / "CHANGELOG.md").open("a") as changelog:
+            changelog.write(f"{entry.rstrip()}\n\n")
+
+    def _require_model(self, slug: str) -> DataModel:
+        model = self.read_model(slug)
+        if model is None:
+            raise NotFound(f"the skill {slug} has no data model yet")
+        return model
+
+    def apply_tenancy(self, slug: str, tenancy: Tenancy) -> dict[str, Any]:
+        """Rewrite the access manifest after a source's tenancy settings change."""
+        model = self._require_model(slug)
+        self._write_model(slug, model, profile=self.read_profile(slug), tenancy=tenancy)
+        return self.read_access(slug)
 
     def _track(self, front: SkillFrontmatter, directory: Path) -> None:
         with self._pool.connection() as conn:
@@ -213,32 +235,44 @@ class SkillStore:
                  "status": front.status.value, "fingerprint": front.schema_fingerprint, "path": str(directory),
                  "generated_at": front.generated_at, "reviewed_by": front.reviewed_by})
 
-    def approve(self, slug: str, *, reviewed_by: str) -> SkillFrontmatter:
-        """Mark a skill and all its metrics as reviewed. From then on re-profiling can only
-        propose changes to them."""
+    def approve(self, slug: str, *, reviewed_by: str, tenancy: Tenancy) -> SkillFrontmatter:
+        """Mark a skill and every definition in it as reviewed. From then on re-profiling can
+        only propose changes to them."""
         directory = self.path(slug)
         front, body = parse_frontmatter((directory / SKILL_FILE).read_text())
-        layer = self.read_semantic_layer(slug)
-        for metric in layer.metrics.values():
-            metric.status, metric.reviewed_by = DefinitionStatus.REVIEWED, reviewed_by
+        model = approve_all(self._require_model(slug), reviewer=reviewed_by)
         approved = front.model_copy(update={"status": SkillStatus.REVIEWED, "reviewed_by": reviewed_by,
                                             "version": front.version + 1})
-        (directory / SKILL_FILE).write_text(render_frontmatter(approved) + body)
-        (directory / "metrics.yaml").write_text(yaml.safe_dump(layer.model_dump(mode="json"), sort_keys=False))
-        with (directory / "CHANGELOG.md").open("a") as changelog:
-            changelog.write(f"## v{approved.version}\n\nApproved by {reviewed_by}.\n\n")
+        self._write_model(slug, model, profile=self.read_profile(slug), tenancy=tenancy)
+        write_atomically(directory / SKILL_FILE, render_frontmatter(approved) + body)
+        self._log(slug, f"## v{approved.version}\n\nApproved by {reviewed_by}.")
         self._track(approved, directory)
         return approved
 
-    def propose_metric(self, slug: str, key: str, metric: Metric, *, reason: str) -> None:
-        """Record a suggested change for a person to accept or reject. Nothing the agent
-        relies on changes until someone does."""
-        layer = self.read_semantic_layer(slug)
-        layer.proposed[key] = metric
-        directory = self.path(slug)
-        (directory / "metrics.yaml").write_text(yaml.safe_dump(layer.model_dump(mode="json"), sort_keys=False))
-        with (directory / "CHANGELOG.md").open("a") as changelog:
-            changelog.write(f"## Proposed change to {key}\n\n{reason.rstrip()}\n\n")
+    def approve_member(self, slug: str, cube: str, member: str, *, reviewed_by: str, tenancy: Tenancy) -> None:
+        model = approve_member(self._require_model(slug), cube, member, reviewer=reviewed_by)
+        self._write_model(slug, model, profile=self.read_profile(slug), tenancy=tenancy)
+        self._log(slug, f"## {cube}.{member}\n\nApproved by {reviewed_by}.")
+
+    def propose(self, slug: str, proposal: Proposal) -> None:
+        """Record a suggested change for a person to accept or reject. Nothing the agent relies
+        on changes until someone does."""
+        self._require_model(slug)
+        self._write_proposals(slug, [*self.read_proposals(slug), proposal])
+        self._log(slug, f"## Proposed change to {proposal.cube}.{proposal.member.name}\n\n{proposal.reason}")
+
+    def decide(self, slug: str, index: int, *, accepted: bool, reviewed_by: str, tenancy: Tenancy) -> None:
+        """Accept or reject a proposal. An accepted one replaces the definition, as reviewed."""
+        proposals = self.read_proposals(slug)
+        if not 0 <= index < len(proposals):
+            raise NotFound("that proposal no longer exists")
+        proposal = proposals.pop(index)
+        if accepted:
+            model = accept(self._require_model(slug), proposal, reviewer=reviewed_by)
+            self._write_model(slug, model, profile=self.read_profile(slug), tenancy=tenancy)
+        self._write_proposals(slug, proposals)
+        verdict = "Accepted" if accepted else "Rejected"
+        self._log(slug, f"## {proposal.cube}.{proposal.member.name}\n\n{verdict} by {reviewed_by}.")
 
     def tracked(self, slug: str) -> dict[str, Any] | None:
         with self._pool.connection() as conn:
@@ -272,9 +306,10 @@ def describe_change(diff: SchemaDiff) -> str:
 
 
 def refresh(store: SkillStore, profiler: Profiler, *, slug: str, catalog: str, source_id: str, description: str,
-            body: str, examples_sql: str) -> tuple[SkillFrontmatter, SchemaDiff]:
+            body: str, tenancy: Tenancy) -> tuple[SkillFrontmatter, SchemaDiff]:
     """Incremental re-profile: measure only what changed, bump the version, and log
-    the diff in the changelog. Does nothing if the skill is already fresh."""
+    the diff in the changelog. Does nothing if the skill is already fresh. The data model is kept
+    as it is: re-profiling it is a person's decision, because reviewed definitions depend on it."""
     report = store.check_freshness(slug, profiler.read_shape(catalog))
     if report.status is Freshness.FRESH:
         return store.read_frontmatter(slug), report.diff
@@ -282,7 +317,7 @@ def refresh(store: SkillStore, profiler: Profiler, *, slug: str, catalog: str, s
     updated = profiler.profile(previous.source_slug, catalog, previous.dialect, previous=previous,
                                only_tables=set(report.diff.changed_tables))
     front = store.write(source_id=source_id, slug=slug, description=description, body=body, profile=updated,
-                        semantic_layer=store.read_semantic_layer(slug), examples_sql=examples_sql,
+                        model=store._require_model(slug), tenancy=tenancy, examples=store.read_examples(slug),
                         change=describe_change(report.diff))
     return front, report.diff
 

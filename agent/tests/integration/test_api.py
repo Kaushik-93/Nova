@@ -176,10 +176,11 @@ def test_an_unknown_skill_is_404(client):
 
 
 def test_a_skill_is_served_with_its_definitions(client):
-    if not client.app.state.services.skills.exists("demo-rental"):
-        pytest.skip("generate it with make skill")
+    if client.app.state.services.skills.read_model("demo-rental") is None:
+        pytest.skip("generate it, as a Cube model, with make skill")
     skill = client.get("/api/skills/demo-rental").json()
-    assert skill["metrics"] and skill["gotchas"] and skill["guide"]
+    assert skill["cubes"] and skill["gotchas"] and skill["guide"]
+    assert all(cube["measures"] or cube["dimensions"] for cube in skill["cubes"])
 
 
 def test_a_chart_built_by_nova_can_be_previewed(client):

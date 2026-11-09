@@ -19,6 +19,8 @@ x-agent-env: &agent-env
   SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
   NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
   TRINO_URL: ${TRINO_URL}
+  CUBE_URL: http://cube:4000
+  CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?run `make env` first}
   DATABASE_URL: ${DATABASE_URL}
   MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
   MODEL_NAME: ${MODEL_NAME:-claude-opus-5-5}
@@ -168,6 +170,39 @@ services:
     mem_limit: 2g
     restart: unless-stopped
 
+  # --- Semantic layer -----------------------------------------------------------
+  # Only Nova's API talks to Cube, with a token it signs per request, so it publishes no port.
+  cube:
+    image: cubejs/cube:v1.8.13
+    environment:
+      CUBEJS_DEV_MODE: "false"
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?run `make env` first}
+      CUBEJS_DB_TYPE: trino
+      CUBEJS_DB_HOST: trino
+      CUBEJS_DB_PORT: "8080"
+      CUBEJS_DB_USER: nova-cube
+      # Models name every table as catalog.schema.table, so the session's defaults are never used.
+      CUBEJS_DB_PRESTO_CATALOG: system
+      CUBEJS_DB_NAME: runtime
+      CUBEJS_CACHE_AND_QUEUE_DRIVER: memory
+      CUBEJS_LOG_LEVEL: warn
+      CUBEJS_TELEMETRY: "false"
+      NOVA_SKILLS_DIR: /nova/skills
+    volumes:
+      - ./cube/cube.js:/cube/conf/cube.js:ro
+      - ../skills:/nova/skills:ro
+    depends_on:
+      trino:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/readyz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 30
+    mem_limit: 1g
+    restart: unless-stopped
+
   # --- BI engine --------------------------------------------------------------
   superset-init:
     image: nova-superset:6.1.0
@@ -280,6 +315,8 @@ services:
         condition: service_healthy
       trino:
         condition: service_healthy
+      cube:
+        condition: service_healthy
       dex:
         condition: service_healthy
 
@@ -316,6 +353,8 @@ services:
       superset:
         condition: service_healthy
       trino:
+        condition: service_healthy
+      cube:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/health')"]

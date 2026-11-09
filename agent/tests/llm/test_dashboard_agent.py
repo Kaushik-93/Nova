@@ -26,6 +26,7 @@ from agent.harness.guardrails import SqlPolicy
 from agent.harness.validators import chart_time_window
 from agent.llm import build_model
 from agent.runtime import make_runtime
+from agent.semantic.client import CubeClient
 from agent.subagents.profiler import generate_skill
 from agent.tools.renderer import render_dashboard
 from agent.tools.skill_store import SkillStore
@@ -91,10 +92,12 @@ def skills(settings, pool, model):
     executor = SqlExecutor(settings.trino_url, AuditLog(pool))
     for slug, catalog, dialect in (("demo-shop", "demo_shop", "postgres"), ("demo-marketing", "demo_marketing", "mysql")):
         source_id = register_source(pool, slug=slug, display_name=slug, catalog=catalog, dialect=dialect)
-        if not store.exists(slug):
-            generate_skill(model=model, store=store, executor=executor, source_id=source_id, slug=slug, catalog=catalog,
-                           dialect=dialect, context=context("skill"),
-                           budget=RunBudget(BudgetLimits(max_steps=60, max_tokens=500_000, max_sql_queries=300)))
+        if store.read_model(slug) is None:
+            cube = CubeClient(settings.cube_url, settings.cubejs_api_secret)
+            generate_skill(model=model, store=store, executor=executor, cube=cube, source_id=source_id, slug=slug,
+                           catalog=catalog, dialect=dialect, context=context("skill"),
+                           budget=RunBudget(BudgetLimits(max_steps=80, max_tokens=800_000, max_sql_queries=600)))
+            cube.close()
     return store
 
 

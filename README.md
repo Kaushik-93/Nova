@@ -24,6 +24,9 @@ seeds the demo data and waits for everything to be healthy.
 | Superset | http://localhost:18088 | `admin`, with the password from `.env` |
 | Trino | http://localhost:18080 | Any username |
 
+Cube, the semantic layer, has no port of its own: only Nova's API talks to it, with a short-lived
+token for each request that carries the person's own access.
+
 Run the tests with `make test`, and see every command with `make help`. Tests that call
 the real model cost money, so they're separate: `make test-llm`. Set `MODEL_PROVIDER`,
 `MODEL_NAME` and the matching API key in `.env` first.
@@ -101,8 +104,8 @@ Everything after that, including the agent and row limits, works from the Trino 
 | Path | Contents |
 |---|---|
 | `infra/` | Compose stack, Superset and Trino config, demo data, infrastructure tests |
-| `agent/` | FastAPI app, deep agent, tools and harness |
-| `skills/` | Generated and reviewed data-source skills |
+| `agent/` | FastAPI app, deep agent, tools and harness; `agent/semantic/` is the semantic layer |
+| `skills/` | Generated and reviewed data-source skills, each with its Cube data model |
 | `ui/` | Next.js app |
 | `evals/` | Golden question sets |
 | `docs/` | Decisions, versions and runbook |

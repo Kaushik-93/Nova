@@ -18,6 +18,7 @@ from agent.harness.executor import CostLimits, SqlExecutor
 from agent.harness.guardrails import SqlPolicy
 from agent.harness.middleware import EventSink
 from agent.projects import project_for_new_sheet
+from agent.semantic.client import CubeClient, CubeIdentity, identity_for
 from agent.tools.skill_store import SkillStore
 from agent.tools.sources import Source, list_sources
 from agent.tools.superset_client import Dashboard, SupersetClient
@@ -54,6 +55,8 @@ class Runtime:
     audit: AuditLog
     executor: SqlExecutor
     superset: SupersetClient
+    cube: CubeClient
+    cube_identity: CubeIdentity
     store: SkillStore
     context: RunContext
     budget: RunBudget
@@ -72,6 +75,7 @@ class Runtime:
 
     def close(self) -> None:
         self.superset.close()
+        self.cube.close()
         if self.skills_view:
             shutil.rmtree(self.skills_view, ignore_errors=True)
 
@@ -121,6 +125,8 @@ def make_runtime(settings: Settings, pool: ConnectionPool, model: BaseChatModel,
                                                     max_estimated_bytes=settings.nova_max_estimated_bytes)),
         superset=SupersetClient(settings.superset_url, settings.superset_admin_user, settings.superset_admin_password,
                                 on_write=audit_write),
+        cube=CubeClient(settings.cube_url, settings.cubejs_api_secret),
+        cube_identity=identity_for(access, visible, user_id=context.user_id),
         store=store,
         budget=RunBudget(BudgetLimits(max_steps=settings.nova_max_steps, max_tokens=settings.nova_max_tokens,
                                       max_wall_seconds=settings.nova_max_wall_seconds,

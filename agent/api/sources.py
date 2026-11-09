@@ -14,6 +14,7 @@ from agent.harness.access import load_access
 from agent.harness.audit import AuditKind, AuditStatus, RunContext
 from agent.harness.budgets import BudgetLimits, RunBudget
 from agent.harness.guardrails import IDENTIFIER
+from agent.semantic.access import Tenancy, tenancy_of, unlimitable
 from agent.subagents.profiler import generate_skill
 from agent.tools.connectors import (CONNECTORS, Connection, create_catalog_sql, encrypt_credentials, superset_uri,
                                     test_connection, write_credentials)
@@ -180,7 +181,8 @@ def tenancy(slug: str, request: Request) -> dict[str, Any]:
 
 @router.put("/{slug}/tenancy", dependencies=[Depends(require_admin)])
 def set_tenancy(slug: str, body: TenancyBody, request: Request) -> dict[str, Any]:
-    """Declare how a source separates tenants. From then on every dataset must carry the column."""
+    """Declare how a source separates tenants. Cube then limits every query on it for anyone limited to
+    some tenants, and refuses them the cubes that can't be limited."""
     services = request.app.state.services
     source = get_source_by_slug(services.pool, slug)
     if source is None:
@@ -190,7 +192,11 @@ def set_tenancy(slug: str, body: TenancyBody, request: Request) -> dict[str, Any
     with services.pool.connection() as conn:
         conn.execute("""UPDATE sources SET tenant_column = %s, tenant_table = %s, tenant_label_column = %s, shared_tables = %s
                         WHERE id = %s""", (body.column, body.table, body.label_column, body.shared_tables, source.id))
-    return {"ok": True}
+    unlimited: list[str] = []
+    if services.skills.exists(slug) and services.skills.read_model(slug) is not None:
+        tenancy = Tenancy(column=body.column, shared_tables=body.shared_tables)
+        unlimited = unlimitable(services.skills.apply_tenancy(slug, tenancy), multi_tenant=bool(body.column))
+    return {"ok": True, "unlimitable_cubes": unlimited}
 
 
 def validate_tenancy(body: TenancyBody, profile: Any) -> None:
@@ -228,7 +234,7 @@ def tenants(slug: str, request: Request) -> list[dict[str, str]]:
 
 def profile_source(services: Any, *, source: Source, context: RunContext, sink: Callable[[dict[str, Any]], None]) -> None:
     """Measure a source and have the profiler subagent write its skill."""
-    generate_skill(model=services.model, store=services.skills, executor=services.executor, source_id=source.id, slug=source.slug,
-                   catalog=source.trino_catalog, dialect=source.dialect, context=context, budget=RunBudget(PROFILE_LIMITS),
-                   sink=sink)
+    generate_skill(model=services.model, store=services.skills, executor=services.executor, cube=services.cube,
+                   source_id=source.id, slug=source.slug, catalog=source.trino_catalog, dialect=source.dialect,
+                   context=context, budget=RunBudget(PROFILE_LIMITS), tenancy=tenancy_of(source), sink=sink)
 

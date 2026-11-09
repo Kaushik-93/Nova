@@ -1,9 +1,11 @@
-"""The profiler subagent: turns a measured SourceProfile into a skill.
+"""The profiler subagent: turns a measured SourceProfile into a skill, whose semantic layer is a
+Cube data model.
 
-The model proposes; the harness verifies. The agent finishes by calling `submit_skill`,
-which runs every metric and example, outside the model's control, and only what really
-executes reaches the skill. Failures go straight back for repair a limited number of
-times, and what still fails is dropped and recorded.
+The model proposes; the harness verifies. The agent finishes by calling `submit_skill`, which
+checks the model statically, compiles it in Cube as a draft no one else can reach, and runs every
+measure, join, key, tenant limit and example (agent/semantic/verify.py), outside the model's
+control. Failures go straight back for repair a limited number of times, and what still fails is
+dropped and recorded. Definitions people have reviewed are never changed by a model.
 
 Submission is an ordinary tool rather than `response_format` for two reasons. A malformed
 submission becomes feedback the model can fix instead of an exception that loses the run.
@@ -15,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -30,15 +31,21 @@ from agent.config import Settings, get_settings
 from agent.db import apply_schema, create_pool
 from agent.harness.audit import AuditLog, RunContext
 from agent.harness.budgets import BudgetLimits, RunBudget
-from agent.harness.errors import ErrorCategory, NovaError, QueryFailure
+from agent.harness.errors import QueryFailure
 from agent.harness.executor import SqlExecutor
 from agent.harness.guardrails import SqlPolicy
 from agent.harness.logs import configure_logging
 from agent.harness.middleware import EventSink, RunMiddleware
 from agent.harness.untrusted import wrap_untrusted
 from agent.llm import build_model
+from agent.semantic.access import Tenancy
+from agent.semantic.client import CubeClient
+from agent.semantic.model import Cube, DataModel, MemberMeta, Status
+from agent.semantic.query import Example
+from agent.semantic.review import merge_reviewed
+from agent.semantic.verify import Verification, Verifier, finalize
 from agent.tools.profiler import Profiler, SourceProfile, TableProfile
-from agent.tools.skill_store import Metric, SemanticLayer, SkillFrontmatter, SkillStore, skill_slug
+from agent.tools.skill_store import SkillFrontmatter, SkillStore, skill_slug
 from agent.tools.sources import register_source
 from agent.tools.sql_tools import make_run_readonly_sql
 
@@ -47,47 +54,22 @@ logger = logging.getLogger(__name__)
 PROMPT = Path(__file__).parent.parent / "prompts" / "profiler.md"
 MAX_REPAIR_ROUNDS = 2
 RECURSION_LIMIT = 200
-METRIC_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
-
-
-class ProposedMetric(BaseModel):
-    key: str = Field(description="snake_case identifier, such as net_revenue")
-    label: str
-    sql: str = Field(description="One aggregate expression")
-    base: str = Field(description="FROM clause without the word FROM, with fully qualified tables")
-    filters: list[str] = Field(default_factory=list, description="WHERE conditions, ANDed together")
-    unit: str | None = None
-    description: str
-
-
-class ProposedDimension(BaseModel):
-    name: str
-    description: str
-
-
-class ProposedExample(BaseModel):
-    question: str
-    sql: str
 
 
 class SkillDraft(BaseModel):
     description: str = Field(description="Under 800 characters: what it holds and when to load it")
     body: str = Field(description="The markdown guide")
-    metrics: list[ProposedMetric] = Field(min_length=1)
-    dimensions: list[ProposedDimension] = Field(default_factory=list)
-    joins: list[str] = Field(default_factory=list)
-    examples: list[ProposedExample] = Field(min_length=1)
+    cubes: list[Cube] = Field(min_length=1, description="The Cube data model: usually one cube per table")
+    examples: list[Example] = Field(min_length=1)
 
-
-class Failure(BaseModel):
-    item: str
-    reason: str
-
-
-class VerificationReport(BaseModel):
-    metric_values: dict[str, float] = Field(default_factory=dict)
-    verified_examples: list[ProposedExample] = Field(default_factory=list)
-    failures: list[Failure] = Field(default_factory=list)
+    def model(self) -> DataModel:
+        """The draft as a data model, with every definition marked inferred: only a person can
+        mark one reviewed, whatever the draft says."""
+        model = DataModel(cubes=self.cubes).model_copy(deep=True)
+        for cube in model.cubes:
+            for member in [*cube.dimensions, *cube.measures]:
+                member.meta = MemberMeta(status=Status.INFERRED, unit=member.meta.unit)
+        return model
 
 
 def describe_column(column) -> str:
@@ -131,83 +113,36 @@ def describe_profile(profile: SourceProfile) -> str:
     return "\n\n".join(sections)
 
 
-def metric_sql(metric: ProposedMetric) -> str:
-    where = f" WHERE {' AND '.join(f'({condition})' for condition in metric.filters)}" if metric.filters else ""
-    return f"SELECT {metric.sql} AS value FROM {metric.base}{where}"
-
-
-def verify_draft(draft: SkillDraft, *, executor: SqlExecutor, policy: SqlPolicy, context: RunContext,
-                 budget: RunBudget) -> VerificationReport:
-    """Run everything the draft claims. The model has no say in the outcome."""
-    report = VerificationReport()
-    seen: set[str] = set()
-    for metric in draft.metrics:
-        name = f"metric {metric.key}"
-        if not METRIC_KEY.match(metric.key) or metric.key in seen:
-            report.failures.append(Failure(item=name, reason="the key must be unique snake_case"))
-            continue
-        seen.add(metric.key)
-        try:
-            result = executor.run(metric_sql(metric), policy=policy, context=context, budget=budget)
-        except NovaError as error:
-            if error.category is ErrorCategory.BUDGET:
-                raise
-            report.failures.append(Failure(item=name, reason=error.message))
-            continue
-        value = result.rows[0][0] if result.rows else None
-        if len(result.rows) != 1 or len(result.columns) != 1:
-            report.failures.append(Failure(item=name, reason="a metric must return exactly one value"))
-        elif value is None:
-            report.failures.append(Failure(item=name, reason="it returned NULL: the filters may match nothing"))
-        else:
-            report.metric_values[metric.key] = float(value)
-
-    for example in draft.examples:
-        name = f"example {example.question!r}"
-        try:
-            result = executor.run(example.sql, policy=policy, context=context, budget=budget)
-        except NovaError as error:
-            if error.category is ErrorCategory.BUDGET:
-                raise
-            report.failures.append(Failure(item=name, reason=error.message))
-            continue
-        if result.row_count == 0:
-            report.failures.append(Failure(item=name, reason="it returned no rows"))
-        else:
-            report.verified_examples.append(example)
-    return report
-
-
 class Submission:
     """What `submit_skill` has received so far."""
 
     def __init__(self) -> None:
         self.attempts = 0
         self.draft: SkillDraft | None = None
-        self.report: VerificationReport | None = None
+        self.report: Verification | None = None
         self.accepted = False
 
 
-def make_submit_skill(submission: Submission, *, executor: SqlExecutor, policy: SqlPolicy, context: RunContext,
-                      budget: RunBudget) -> BaseTool:
+def make_submit_skill(submission: Submission, *, verifier: Verifier, reviewed: DataModel | None) -> BaseTool:
     def submit_skill(**fields: Any) -> str:
         """Submit the finished skill. This is how you finish.
 
-        Every metric and example is run when you call this. If any fail you'll get the
-        failures back: fix them and submit the complete skill again.
+        The model is compiled and every measure, join, key and example is run when you call this.
+        If anything fails you'll get the failures back: fix them and submit the complete skill again.
         """
         draft = SkillDraft(**fields)
-        report = verify_draft(draft, executor=executor, policy=policy, context=context, budget=budget)
+        merged, _ = merge_reviewed(reviewed, draft.model())
+        report = verifier.verify(merged, draft.examples)
         submission.attempts += 1
         submission.draft, submission.report = draft, report
-        logger.info("draft verified", extra={"attempt": submission.attempts, "metrics": len(report.metric_values),
-                                             "failures": len(report.failures)})
-        if not report.failures:
+        logger.info("draft verified", extra={"attempt": submission.attempts, "measures": len(report.values),
+                                             "problems": len(report.problems)})
+        if not report.problems:
             submission.accepted = True
             return "Accepted: everything ran. You're done."
         if submission.attempts > MAX_REPAIR_ROUNDS:
             submission.accepted = True
-            return "Accepted without the items that failed. You're done."
+            return "Accepted without the parts that failed. You're done."
         return repair_message(report)
 
     return StructuredTool.from_function(func=submit_skill, name="submit_skill", args_schema=SkillDraft)
@@ -219,68 +154,69 @@ def build_agent(model: BaseChatModel, *, tools: list[BaseTool], budget: RunBudge
                              middleware=[RunMiddleware(budget, agent="profiler", run_id=run_id, sink=sink)])
 
 
-def task_message(profile: SourceProfile) -> str:
+def task_message(profile: SourceProfile, reviewed: DataModel | None = None) -> str:
+    kept = ""
+    if reviewed is not None:
+        names = [f"{cube.name}.{member.name}" for cube in reviewed.cubes for member in [*cube.dimensions, *cube.measures]
+                 if member.meta.status is Status.REVIEWED]
+        if names:
+            kept = ("\n\nPeople have reviewed these definitions, and they will be kept as they are whatever you "
+                    "submit, so keep their cubes' names: " + ", ".join(names))
     return (f"Write the skill for the source `{profile.source_slug}`, which is Trino catalog "
-            f"`{profile.catalog}` (underlying dialect: {profile.dialect}).\n\n"
+            f"`{profile.catalog}` (underlying dialect: {profile.dialect}). Name every cube "
+            f"`{profile.catalog}__<name>`.{kept}\n\n"
             f"Measurements:\n{wrap_untrusted(describe_profile(profile))}")
 
 
-def repair_message(report: VerificationReport) -> str:
-    problems = "\n".join(f"- {f.item}: {f.reason}" for f in report.failures)
-    return f"Not accepted. I ran everything and these failed:\n{problems}\n\nFix them and call submit_skill again."
+def repair_message(report: Verification) -> str:
+    problems = "\n".join(f"- {p.item}: {p.reason}" for p in report.problems)
+    return f"Not accepted. I checked everything and these failed:\n{problems}\n\nFix them and call submit_skill again."
 
 
-def draft_skill(model: BaseChatModel, profile: SourceProfile, *, executor: SqlExecutor, context: RunContext,
-                budget: RunBudget, sink: EventSink | None = None) -> tuple[SkillDraft, VerificationReport]:
+def draft_skill(model: BaseChatModel, profile: SourceProfile, *, verifier: Verifier, executor: SqlExecutor,
+                reviewed: DataModel | None, context: RunContext, budget: RunBudget,
+                sink: EventSink | None = None) -> SkillDraft:
     """Run the agent until it has submitted a skill the harness has checked."""
     policy = SqlPolicy(allowed_catalogs=frozenset({profile.catalog}), max_rows=1000)
     submission = Submission()
     agent = build_agent(model, budget=budget, run_id=context.run_id, sink=sink, tools=[
         make_run_readonly_sql(executor, policy=policy, context=context, budget=budget),
-        make_submit_skill(submission, executor=executor, policy=policy, context=context, budget=budget),
+        make_submit_skill(submission, verifier=verifier, reviewed=reviewed),
     ])
     config = {"recursion_limit": RECURSION_LIMIT}
-    result = agent.invoke({"messages": [HumanMessage(task_message(profile))]}, config)
+    result = agent.invoke({"messages": [HumanMessage(task_message(profile, reviewed))]}, config)
     if not submission.accepted:
         # It stopped without finishing, so remind it once rather than fail the run.
         reminder = HumanMessage("You stopped before submit_skill accepted the skill. Call submit_skill now.")
         agent.invoke({"messages": [*result["messages"], reminder]}, config)
-
-    if submission.draft is None or submission.report is None or not submission.report.metric_values:
-        raise QueryFailure("the profiler produced no metric that actually runs")
-    return submission.draft, submission.report
-
-
-def to_semantic_layer(draft: SkillDraft, report: VerificationReport) -> SemanticLayer:
-    """Keep only what was verified."""
-    metrics = {m.key: Metric(label=m.label, sql=m.sql, base=m.base, filters=m.filters, unit=m.unit,
-                             description=m.description)
-               for m in draft.metrics if m.key in report.metric_values}
-    return SemanticLayer(metrics=metrics, dimensions={d.name: d.description for d in draft.dimensions},
-                         joins=draft.joins)
+    if submission.draft is None:
+        raise QueryFailure("the profiler never submitted a skill")
+    return submission.draft
 
 
-def to_examples_sql(report: VerificationReport) -> str:
-    # Questions are collapsed to one line so that none can break out of its SQL comment.
-    return "\n\n".join(f"-- {' '.join(example.question.split())}\n{example.sql.rstrip().rstrip(';')};"
-                       for example in report.verified_examples)
-
-
-def generate_skill(*, model: BaseChatModel, store: SkillStore, executor: SqlExecutor, source_id: str, slug: str,
-                   catalog: str, dialect: str, context: RunContext, budget: RunBudget,
-                   sink: EventSink | None = None) -> SkillFrontmatter:
+def generate_skill(*, model: BaseChatModel, store: SkillStore, executor: SqlExecutor, cube: CubeClient, source_id: str,
+                   slug: str, catalog: str, dialect: str, context: RunContext, budget: RunBudget,
+                   tenancy: Tenancy | None = None, sink: EventSink | None = None) -> SkillFrontmatter:
     """Measure a source, have the subagent interpret it, and write the verified skill."""
     def on_table(table: str, done: int, total: int) -> None:
         if sink:
             sink({"event": "profile_table", "agent": "profiler", "table": table, "done": done, "total": total})
 
+    tenancy = tenancy or Tenancy()
     profile = Profiler(executor, context=context, budget=budget, on_table=on_table).profile(slug, catalog, dialect)
-    draft, report = draft_skill(model, profile, executor=executor, context=context, budget=budget, sink=sink)
-    change = [f"Profiled {len(profile.tables)} tables. {len(report.metric_values)} metrics and "
-              f"{len(report.verified_examples)} examples verified by running them."]
-    change += [f"- Dropped {failure.item}: {failure.reason}" for failure in report.failures]
+    verifier = Verifier(cube=cube, executor=executor, skills_dir=store.root, slug=slug, profile=profile, context=context,
+                        budget=budget, tenancy=tenancy, taken=store.cube_names(excluding=slug))
+    reviewed = store.read_model(slug)
+    draft = draft_skill(model, profile, verifier=verifier, executor=executor, reviewed=reviewed, context=context,
+                        budget=budget, sink=sink)
+    merged, proposals = merge_reviewed(reviewed, draft.model())
+    final, report, dropped = finalize(verifier, merged, draft.examples)
+    cubes = len(final.cubes)
+    change = [f"Profiled {len(profile.tables)} tables. {cubes} cubes, {len(report.values)} measures and "
+              f"{len(report.examples)} examples verified by running them."]
+    change += [f"- Dropped {note}" for note in dropped]
     return store.write(source_id=source_id, slug=slug, description=draft.description, body=draft.body, profile=profile,
-                       semantic_layer=to_semantic_layer(draft, report), examples_sql=to_examples_sql(report),
+                       model=final, tenancy=tenancy, examples=report.examples, proposals=proposals,
                        change="\n".join(change))
 
 
@@ -302,14 +238,16 @@ def main() -> None:
     apply_schema(pool)
     slug = skill_slug(args.catalog)
     budget = budget_from(settings)
+    cube = CubeClient(settings.cube_url, settings.cubejs_api_secret)
     front = generate_skill(
         model=build_model(settings), store=SkillStore(settings.nova_skills_dir, pool),
-        executor=SqlExecutor(settings.trino_url, AuditLog(pool)),
+        executor=SqlExecutor(settings.trino_url, AuditLog(pool)), cube=cube,
         source_id=register_source(pool, slug=slug, display_name=args.name or args.catalog, catalog=args.catalog,
                                   dialect=args.dialect),
         slug=slug, catalog=args.catalog, dialect=args.dialect,
         context=RunContext(run_id=f"profile-{uuid.uuid4().hex[:12]}", user_id="system"), budget=budget)
     print(f"wrote {front.name} v{front.version}: {budget.snapshot()}")
+    cube.close()
     pool.close()
 
 
