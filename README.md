@@ -1,7 +1,7 @@
 # Nova
 
 A GenAI BI platform. Connect your data sources, and an AI agent learns them and builds
-Apache Superset dashboards from a sentence or two.
+dashboards from a sentence or two, on a semantic layer (Cube) that every number comes from.
 
 > **Status: in development.** You can sign in, connect sources, limit people to their own
 > tenants, and build dashboards from a prompt while you watch the agent work.
@@ -21,11 +21,13 @@ seeds the demo data and waits for everything to be healthy.
 |---|---|---|
 | **Nova** | http://localhost:13000 | `NOVA_ADMIN_EMAIL` and `NOVA_ADMIN_PASSWORD` from `.env` |
 | API | http://localhost:18000/docs | The same session as Nova |
-| Superset | http://localhost:18088 | `admin`, with the password from `.env` |
 | Trino | http://localhost:18080 | Any username |
 
 Cube, the semantic layer, has no port of its own: only Nova's API talks to it, with a short-lived
 token for each request that carries the person's own access.
+
+`make gallery` builds a **Chart gallery** project with one of every chart Nova draws, on the rental
+demo data.
 
 Run the tests with `make test`, and see every command with `make help`. Tests that call
 the real model cost money, so they're separate: `make test-llm`. Set `MODEL_PROVIDER`,
@@ -46,8 +48,10 @@ line is trusted and isn't limited by anyone's access, so keep it to administrato
 Sign in as an administrator and open **Sources**. On a fresh install, connect a demo source with
 one click, or use **Connect a source** with a PostgreSQL or MySQL database.
 
-Nova tests the connection and warns you if the login can write. It then registers the source with
-Superset, adds a Trino catalog and profiles the data, and you can follow each step. The password is
+Nova tests the connection and warns you if the login can write. It then adds a Trino catalog and
+profiles the data into a semantic model, checking every definition by running it, and you can follow
+each step. Review the definitions in the **Catalog**: until a person approves one, charts built on it
+are marked AI-inferred rather than Certified. The password is
 stored encrypted and is never returned or shown to the agent. Use a read-only login.
 
 ## People and tenants
@@ -65,8 +69,10 @@ column. You can then limit someone to particular tenants. The limit applies ever
 query the agent runs for them, and to every dashboard they open, including ones an administrator
 built for everyone. A tenant filter on a shared dashboard offers them only their own tenants.
 
-Dashboards are private to whoever built them until an administrator shares them. Turn tenancy on
-before building dashboards on a source, because every dataset then has to carry the tenant column.
+Dashboards are private to whoever built them until an administrator shares them. Cube applies each
+person's tenant limit to every chart they open, so a shared dashboard shows everyone their own rows.
+A cube whose rows can't be limited, because its table has no tenant column and isn't marked shared, is
+hidden from anyone limited to tenants.
 
 ## Single sign-on
 
@@ -94,16 +100,16 @@ through `NOVA_ADMIN_EMAIL` and promote people from **People**.
 ## Adding a source type
 
 Add a `Connector` to `CONNECTORS` in `agent/tools/connectors.py`, with its Trino connector, JDBC URL,
-SQLAlchemy driver and a read-only check. Add the type to `Connection.kind` and to the form in
-`ui/src/app/sources/connect-form.tsx`, and install its driver in `infra/superset/requirements.txt`.
+and a read-only check. Add the type to `Connection.kind` and to the form in
+`ui/src/app/sources/connect-form.tsx`.
 If the database exposes declared keys in its own way, add that query to `agent/tools/profiler.py`.
-Everything after that, including the agent and row limits, works from the Trino catalog.
+Everything after that, including the semantic model, the agent and row limits, works from the Trino catalog.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `infra/` | Compose stack, Superset and Trino config, demo data, infrastructure tests |
+| `infra/` | Compose stack, Trino and Cube config, demo data, infrastructure tests |
 | `agent/` | FastAPI app, deep agent, tools and harness; `agent/semantic/` is the semantic layer |
 | `skills/` | Generated and reviewed data-source skills, each with its Cube data model |
 | `ui/` | Next.js app |

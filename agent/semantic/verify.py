@@ -114,6 +114,37 @@ class Verifier:
         finally:
             shutil.rmtree(directory, ignore_errors=True)
 
+    def verify_member(self, model: DataModel, cube_name: str, member_name: str, identity: CubeIdentity) -> None:
+        """Check one new definition in an otherwise published model, as the person asking for it, so
+        their own limits apply. Raises with every reason it fails."""
+        tables = {f"{self.catalog}.{table.qualified}".lower() for table in self.profile.tables}
+        problems = check_model(model, catalog=self.catalog, tables=tables, taken=self.taken)
+        if not problems:
+            scoped, manifest = apply_tenancy(model, catalog=self.catalog, profile=self.profile, tenancy=self.tenancy)
+            self._remove_stale_drafts()
+            draft = uuid.uuid4().hex[:16]
+            directory = self.skills_dir / "_drafts" / draft
+            try:
+                write_atomically(directory / "model" / f"{self.slug}.yml", render_checked(scoped))
+                write_atomically(directory / "model" / "access.json", json.dumps(manifest, indent=2))
+                as_draft = identity.model_copy(update={"model": f"draft-{draft}"})
+                report = Verification()
+                try:
+                    self.cube.meta(as_draft)
+                except NovaError as error:
+                    raise QueryFailure(f"Cube can't compile the model with it: {error.message}") from error
+                cube = model.cube(cube_name)
+                member = cube.member(member_name)
+                if isinstance(member, Dimension):
+                    self._check_dimension(cube, member, as_draft, report)
+                else:
+                    self._check_measure(cube, member, as_draft, report)
+                problems = report.problems
+            finally:
+                shutil.rmtree(directory, ignore_errors=True)
+        if problems:
+            raise QueryFailure("; ".join(f"{p.item}: {p.reason}" for p in problems)[:2000])
+
     def _load(self, identity: CubeIdentity, query: dict) -> list[dict]:
         self.budget.spend_query()
         return self.cube.load(identity, query).data

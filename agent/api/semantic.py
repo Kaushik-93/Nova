@@ -20,6 +20,7 @@ from agent.api.auth import User, require_admin, require_builder
 from agent.harness.errors import NotFound
 from agent.semantic.access import tenancy_of
 from agent.semantic.client import identity_for
+from agent.semantic.describe import annotate
 from agent.semantic.model import DataModel, Dimension, Measure, Status
 from agent.semantic.query import SemanticQuery
 from agent.semantic.review import certified
@@ -64,10 +65,13 @@ def _models(services: Any, sources: list[Source]) -> dict[str, DataModel]:
 
 
 def _member(cube_name: str, member: Dimension | Measure) -> dict[str, Any]:
+    """A definition, with its SQL: people trust a number more when they can see how it's made. A
+    definition describes the data's structure, never its contents (agent/prompts/profiler.md)."""
     return {"name": f"{cube_name}.{member.name}", "short_name": member.name, "title": member.title or member.name,
             "description": member.description, "type": member.type,
             "format": getattr(member, "format", None), "unit": member.meta.unit,
-            "status": member.meta.status.value, "reviewed_by": member.meta.reviewed_by}
+            "status": member.meta.status.value, "reviewed_by": member.meta.reviewed_by,
+            "sql": member.sql, "filters": [f.sql for f in getattr(member, "filters", [])]}
 
 
 def describe_cubes(model: DataModel, *, hidden: set[str] = frozenset()) -> list[dict[str, Any]]:
@@ -79,6 +83,7 @@ def describe_cubes(model: DataModel, *, hidden: set[str] = frozenset()) -> list[
         dimensions = [d for d in cube.dimensions if d.public is not False and not d.primary_key]
         cubes.append({
             "name": cube.name, "title": cube.title or cube.name, "description": cube.description,
+            "source": cube.sql_table or cube.sql,
             "measures": [_member(cube.name, m) for m in cube.measures],
             "dimensions": [_member(cube.name, d) for d in dimensions],
             "segments": [{"name": f"{cube.name}.{s.name}", "title": s.title or s.name, "description": s.description}
@@ -116,8 +121,9 @@ def run_query(services: Any, user: User, query: SemanticQuery) -> dict[str, Any]
     identity, readable = _identity(services, user)
     result = services.cube.load(identity, query.to_cube())
     columns = list(result.data[0].keys()) if result.data else [*query.measures, *query.dimensions]
+    model = _model_for(services, readable)
     return {"columns": columns, "rows": result.data, "row_count": len(result.data),
-            "annotation": result.annotation, "certified": certified(_model_for(services, readable), query.members())}
+            "annotation": annotate(result.annotation, model), "certified": certified(model, query.members())}
 
 
 @router.post("/semantic/query")

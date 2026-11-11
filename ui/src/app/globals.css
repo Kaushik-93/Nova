@@ -17,26 +17,47 @@
   --color-destructive: var(--destructive);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-rail: var(--rail);
+  /* Member types, as in the semantic layer: text and number dimensions, time, measures, segments. */
+  --color-dim: var(--dim);
+  --color-dim-foreground: var(--dim-foreground);
+  --color-time: var(--time);
+  --color-time-foreground: var(--time-foreground);
+  --color-measure: var(--measure);
+  --color-measure-foreground: var(--measure-foreground);
+  --color-segment: var(--segment);
+  --color-segment-foreground: var(--segment-foreground);
   --shadow-card: 0 1px 2px rgb(16 16 24 / 0.04), 0 1px 3px rgb(16 16 24 / 0.03);
   --shadow-raised: 0 4px 16px rgb(16 16 24 / 0.06), 0 1px 3px rgb(16 16 24 / 0.05);
 }
 
 :root {
   color-scheme: light;
-  --background: #f6f6f7;
-  --foreground: #16161a;
+  --background: #f4f5f8;
+  --foreground: #1b1f3b;
   --card: #ffffff;
-  --muted: #f1f1f3;
-  --muted-foreground: #6c6c78;
-  --border: #e5e5e9;
-  --primary: #4f46e5;
+  --rail: #ffffff;
+  --muted: #eef0f4;
+  --muted-foreground: #5f6580;
+  --border: #e3e5ec;
+  --primary: #5754d8;
   --primary-foreground: #ffffff;
-  --accent: #eeeeff;
-  --destructive: #dc2626;
-  --success: #15803d;
-  --warning: #b45309;
-  --grid: #ececef;
-  --axis: #8a8a95;
+  --accent: #ececfc;
+  --destructive: #d12f2f;
+  --success: #1c7c45;
+  --warning: #a8590b;
+  --dim: #e5eaf4;
+  --dim-foreground: #33426a;
+  --time: #e1efe5;
+  --time-foreground: #286640;
+  --measure: #f4ead6;
+  --measure-foreground: #74510f;
+  --segment: #efe6f7;
+  --segment-foreground: #653c8c;
+  --grid: #eceef2;
+  --axis: #868ba0;
+  /* One hue, light to dark, for how much of something: heatmaps, the calendar and the map. */
+  --seq-1: #dbe9fb; --seq-2: #b6d2f6; --seq-3: #86b4ee; --seq-4: #5596e6; --seq-5: #2a78d6; --seq-6: #1d5aa6; --seq-7: #123e74;
   /* Validated for colour blindness on this surface. The order matters: see the dataviz check. */
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
   --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
@@ -44,20 +65,31 @@
 
 .dark {
   color-scheme: dark;
-  --background: #0d0d10;
-  --foreground: #f4f4f6;
-  --card: #18181b;
-  --muted: #232327;
-  --muted-foreground: #a0a0ab;
-  --border: #2a2a2f;
-  --primary: #818cf8;
-  --primary-foreground: #14141a;
-  --accent: #23224a;
-  --destructive: #f87171;
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --grid: #2a2a2f;
-  --axis: #8a8a95;
+  --background: #0e1016;
+  --foreground: #eceef5;
+  --card: #161922;
+  --rail: #12141b;
+  --muted: #1f232d;
+  --muted-foreground: #9ca2b6;
+  --border: #282c38;
+  --primary: #8e8cf7;
+  --primary-foreground: #12121c;
+  --accent: #24244a;
+  --destructive: #f37373;
+  --success: #52d38a;
+  --warning: #f2b54c;
+  --dim: #1f2a40;
+  --dim-foreground: #adc0e6;
+  --time: #1a2e23;
+  --time-foreground: #96d3ab;
+  --measure: #33291a;
+  --measure-foreground: #e6c78c;
+  --segment: #2b2238;
+  --segment-foreground: #cfb4ec;
+  --grid: #282c38;
+  --axis: #8a8fa3;
+  /* Dark mode keeps the hue but runs from the surface up, so more is brighter. */
+  --seq-1: #18263d; --seq-2: #1c3863; --seq-3: #224d8c; --seq-4: #2c66b8; --seq-5: #3987e5; --seq-6: #77aef0; --seq-7: #b9d6f8;
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
   --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
 }

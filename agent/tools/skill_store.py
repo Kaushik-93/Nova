@@ -30,7 +30,8 @@ from pydantic import BaseModel, Field
 
 from agent.harness.errors import InvalidRequest, NotFound
 from agent.semantic.access import Tenancy, apply_tenancy
-from agent.semantic.model import TENANT_DIMENSION, DataModel, Proposal, Proposals, write_atomically
+from agent.semantic.model import (TENANT_DIMENSION, DataModel, Dimension, Measure, MemberMeta, Proposal, Proposals,
+                                  write_atomically)
 from agent.semantic.query import Example
 from agent.semantic.review import accept, approve_all, approve_member
 from agent.semantic.validate import render_checked
@@ -195,6 +196,11 @@ class SkillStore:
         self._track(front, directory)
         return front
 
+    def publish_model(self, slug: str, model: DataModel, *, profile: SourceProfile, tenancy: Tenancy) -> None:
+        """Publish a model written by code rather than drafted by a model, such as the chart gallery's.
+        It still gets its tenant limits from the tenancy settings, like every other model."""
+        self._write_model(slug, model, profile=profile, tenancy=tenancy)
+
     def _write_model(self, slug: str, model: DataModel, *, profile: SourceProfile, tenancy: Tenancy) -> None:
         scoped, manifest = apply_tenancy(model, catalog=profile.catalog, profile=profile, tenancy=tenancy)
         directory = self.path(slug) / "model"
@@ -253,6 +259,22 @@ class SkillStore:
         model = approve_member(self._require_model(slug), cube, member, reviewer=reviewed_by)
         self._write_model(slug, model, profile=self.read_profile(slug), tenancy=tenancy)
         self._log(slug, f"## {cube}.{member}\n\nApproved by {reviewed_by}.")
+
+    def add_member(self, slug: str, cube: str, member: Dimension | Measure, *, reason: str, verifier: Any,
+                   identity: Any) -> None:
+        """Add a definition the model lacks, once it's been checked (agent/semantic/verify.py). It's
+        published as inferred, so nothing built on it is certified until a person reviews it."""
+        model = self._require_model(slug)
+        target = model.cube(cube)
+        if target is None:
+            raise NotFound(f"no cube {cube} in {slug}")
+        if target.member(member.name) is not None:
+            raise InvalidRequest(f"{cube}.{member.name} already exists; propose a change to it instead")
+        member = member.model_copy(update={"meta": MemberMeta(unit=member.meta.unit)}, deep=True)
+        (target.dimensions if isinstance(member, Dimension) else target.measures).append(member)
+        verifier.verify_member(model, cube, member.name, identity)
+        self._write_model(slug, model, profile=self.read_profile(slug), tenancy=verifier.tenancy)
+        self._log(slug, f"## Added {cube}.{member.name}\n\n{reason.rstrip()} (AI-inferred, not yet reviewed)")
 
     def propose(self, slug: str, proposal: Proposal) -> None:
         """Record a suggested change for a person to accept or reject. Nothing the agent relies

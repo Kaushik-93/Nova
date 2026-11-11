@@ -14,7 +14,6 @@ psycopg[binary]==3.3.8
 psycopg-pool==3.3.3
 pymysql==1.2.3
 playwright==1.64.1
-prison==0.2.1
 pydantic==2.14.2
 pydantic-settings==2.16.2
 python-json-logger==4.2.0

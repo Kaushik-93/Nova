@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 
-import { EmptyState, ErrorState, Loading, PageHeader } from "@/components/states";
+import { Page } from "@/components/page";
+import { EmptyState, ErrorState, Loading } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -51,12 +52,10 @@ export default function ProjectsPage() {
   useEffect(() => { api.projects().then(setRows).catch((cause) => setError(cause.message)); }, []);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5 p-8">
-      <PageHeader title="Projects" description={builder
+    <Page title="Projects" icon={<FolderOpen className="size-4" />} width="default"
+      description={builder
         ? "A project holds one or more sheets, and each sheet is a dashboard."
-        : "The projects shared with you. Each sheet in a project is a dashboard."}>
-        {builder && <Button variant="outline" size="sm" onClick={() => setAdding(!adding)}><Plus className="size-3.5" /> New project</Button>}
-      </PageHeader>
+        : "The projects shared with you. Each sheet in a project is a dashboard."} actions={<>{builder && <Button variant="outline" size="sm" onClick={() => setAdding(!adding)}><Plus className="size-3.5" /> New project</Button>}</>}>
       {error && <ErrorState message={error} />}
       {adding && <NewProject onError={setError} />}
       {!rows && !error && <Loading />}
@@ -84,6 +83,6 @@ export default function ProjectsPage() {
           </Link>
         ))}
       </div>
-    </div>
+    </Page>
   );
 }

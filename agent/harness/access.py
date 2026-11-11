@@ -1,9 +1,10 @@
 """Who may read what. The rule is the same everywhere: an admin reads everything, anyone else
 reads only what they've been granted, and anything unclear is refused.
 
-Rows are limited in two places, from the same grant. Dashboards get a row rule in the guest
-token, and the agent's SQL is rewritten by the guardrails. So the agent can never show someone
-a number their own dashboard wouldn't.
+Rows are limited in two places, from the same grant. Everything shown through the semantic layer
+is limited by Cube (agent/semantic/client.py builds the identity it enforces), and the agent's own
+SQL is rewritten by the guardrails. So the agent can never show someone a number their own
+dashboard wouldn't.
 """
 
 from __future__ import annotations
@@ -16,8 +17,7 @@ from pathlib import Path
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
-from agent.harness.errors import PermissionFailure
-from agent.harness.guardrails import RowScope, SqlPolicy, scope_clause
+from agent.harness.guardrails import RowScope, SqlPolicy
 from agent.tools.skill_store import SkillStore
 from agent.tools.sources import Source
 
@@ -111,28 +111,3 @@ def make_skills_view(sources: list[Source], access: UserAccess | None, skills_di
             limited = access.tenants_of(source) is not None
             shutil.copytree(origin, view / source.slug, ignore=shutil.ignore_patterns("schema.json") if limited else None)
     return str(view)
-
-
-def guest_rules(access: UserAccess, sources: list[Source], catalogs: list[str], store: SkillStore) -> list[dict[str, str]]:
-    """The row rules for showing a dashboard to a user, or a refusal.
-
-    Superset applies a rule with no dataset to every dataset the token reaches, and a dataset
-    without that column fails rather than showing everything. A dashboard over two sources
-    with different tenant columns can't be expressed that way, so it's refused."""
-    if access.is_admin:
-        return []
-    by_catalog = {source.trino_catalog: source for source in sources}
-    if not catalogs or any(catalog not in by_catalog for catalog in catalogs):
-        raise PermissionFailure("this dashboard can't be shown to you")
-    clauses: set[str] = set()
-    for catalog in catalogs:
-        source = by_catalog[catalog]
-        if not access.can_read(source):
-            raise PermissionFailure("you don't have access to the data behind this dashboard")
-        tenants = access.tenants_of(source)
-        if tenants is not None:
-            scope = row_scope(source, tenants, store)
-            clauses.add(scope_clause(scope.column, scope.values, numeric=scope.numeric))
-    if len(clauses) > 1:
-        raise PermissionFailure("this dashboard mixes sources that can't be limited to your data together")
-    return [{"clause": clause} for clause in clauses]

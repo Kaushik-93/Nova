@@ -15,7 +15,6 @@ from agent.api.auth import SsoRefused, provision_sso_user
 from agent.api.main import create_app
 from agent.api.runs import RunManager
 from agent.config import get_settings
-from agent.tools.superset_payloads import ChartSpec, Metric, Viz
 
 pytestmark = pytest.mark.integration
 
@@ -79,9 +78,9 @@ def dashboard_row(services):
         with services.pool.connection() as conn:
             project = conn.execute("INSERT INTO projects (slug, name, created_by, shared) VALUES (%s, 'Auth test', %s, %s) RETURNING id",
                                    (slug, owner, shared)).fetchone()[0]
-            conn.execute("""INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, created_by, catalogs, project_id)
-                            VALUES (%s, %s, 0, %s, 'Auth test', %s, %s, %s)""",
-                         (slug, slug, str(uuid.uuid4()), owner, list(catalogs), project))
+            conn.execute("""INSERT INTO dashboards (slug, thread_id, title, created_by, catalogs, project_id)
+                            VALUES (%s, %s, 'Auth test', %s, %s, %s)""",
+                         (slug, slug, owner, list(catalogs), project))
         slugs.append(slug)
         return slug
 
@@ -260,29 +259,6 @@ def test_losing_access_hides_your_own_dashboards(admin, make_user, dashboard_row
 def test_a_dashboard_with_no_record_of_its_sources_cant_be_shared(admin, dashboard_row):
     slug = dashboard_row("someone@nova.local", catalogs=())
     assert admin.patch(f"/api/projects/{slug}", json={"shared": True}).status_code == 400
-
-
-def test_a_chart_preview_is_only_for_whoever_built_it(admin, make_user, services):
-    """Previews reach Superset as an admin, so nothing else would stop this."""
-    owner, other = make_user(), make_user()
-    key = f"preview-{uuid.uuid4().hex[:8]}"
-    superset = services.superset
-    dataset = superset.ensure_dataset(key=key, name=f"{key}__sales", database_id=superset.database_id("Nova Trino"),
-                                      sql="SELECT status FROM demo_shop.shop.orders")
-    spec = ChartSpec(key="count", title="Orders", viz=Viz.BIG_NUMBER, metrics=[Metric(label="Orders", sql="COUNT(*)")])
-    chart = superset.ensure_chart(spec, dataset_id=dataset.id, dashboard_key=key)
-    run = f"run-{uuid.uuid4().hex[:12]}"
-    with services.pool.connection() as conn:
-        conn.execute("""INSERT INTO runs (run_id, thread_id, prompt, status, created_by, dashboard_key)
-                        VALUES (%s, %s, 'p', 'failed', %s, %s)""", (run, run, owner.email, key))
-    try:
-        assert owner.get(f"/api/charts/{chart.id}/preview").status_code == 200
-        assert other.get(f"/api/charts/{chart.id}/preview").status_code == 404
-    finally:
-        with services.pool.connection() as conn:
-            conn.execute("DELETE FROM runs WHERE run_id = %s", (run,))
-        superset.delete_chart(chart.id)
-        superset.delete_dataset(dataset.id)
 
 
 # --- SSO, through Dex ---------------------------------------------------------------------------

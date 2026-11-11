@@ -30,14 +30,14 @@ export function TimingPanel({ timing, wallSeconds }: { timing: Timing; wallSecon
                 </div>
                 <div className="flex h-1.5 gap-0.5 rounded-full">
                   <div className="rounded-full bg-primary" style={{ width: `${(totals.model_seconds / longest) * 100}%` }} title="Waiting for the model" />
-                  <div className="rounded-full bg-warning" style={{ width: `${(totals.tool_seconds / longest) * 100}%` }} title="Data and Superset" />
+                  <div className="rounded-full bg-warning" style={{ width: `${(totals.tool_seconds / longest) * 100}%` }} title="Data and the semantic layer" />
                 </div>
               </div>
             );
           })}
           <p className="flex gap-3 pt-0.5 text-[11px] text-muted-foreground">
             <span className="flex items-center gap-1.5"><i className="h-0.5 w-3 rounded bg-primary" /> Model</span>
-            <span className="flex items-center gap-1.5"><i className="h-0.5 w-3 rounded bg-warning" /> Data and Superset</span>
+            <span className="flex items-center gap-1.5"><i className="h-0.5 w-3 rounded bg-warning" /> Data and the semantic layer</span>
           </p>
         </div>
       )}

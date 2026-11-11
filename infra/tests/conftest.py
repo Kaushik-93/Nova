@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from typing import Iterator
 
-import httpx
 import psycopg
 import pymysql
 import pytest
@@ -11,41 +10,6 @@ import trino
 from datetime import date
 
 from seed.generate import Dataset, generate
-
-
-@pytest.fixture(scope="session")
-def ui_origin() -> str:
-    return os.environ["NOVA_UI_ORIGIN"].rstrip("/")
-
-
-@pytest.fixture(scope="session")
-def superset_url() -> str:
-    return os.environ["SUPERSET_URL"].rstrip("/")
-
-
-@pytest.fixture(scope="session")
-def superset(superset_url: str) -> Iterator[httpx.Client]:
-    """A client logged in as admin, carrying the JWT, CSRF token and session cookie."""
-    with httpx.Client(base_url=superset_url, timeout=90) as client:
-        response = client.post("/api/v1/security/login", json={
-            "username": os.environ["SUPERSET_ADMIN_USER"],
-            "password": os.environ["SUPERSET_ADMIN_PASSWORD"],
-            "provider": "db",
-            "refresh": False,
-        })
-        response.raise_for_status()
-        client.headers["Authorization"] = f"Bearer {response.json()['access_token']}"
-        csrf = client.get("/api/v1/security/csrf_token/")
-        csrf.raise_for_status()
-        client.headers["X-CSRFToken"] = csrf.json()["result"]
-        client.headers["Referer"] = superset_url
-        yield client
-
-
-@pytest.fixture(scope="session")
-def trino_database_id(superset: httpx.Client) -> int:
-    databases = superset.get("/api/v1/database/").json()["result"]
-    return next(d["id"] for d in databases if d["database_name"] == "Nova Trino")
 
 
 @pytest.fixture(scope="session")

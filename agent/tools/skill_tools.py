@@ -9,7 +9,8 @@ import logging
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
-from agent.harness.errors import InvalidRequest, NovaError
+from agent.harness.errors import InvalidRequest
+from agent.harness.untrusted import wrap_untrusted
 from agent.runtime import Runtime
 from agent.semantic.access import tenancy_of
 from agent.semantic.describe import describe_model
@@ -79,18 +80,6 @@ def make_source_tools(runtime: Runtime) -> list[BaseTool]:
             return f"stale:\n{describe_change(report.diff)}"
         return report.status.value
 
-    def measure_sql(model) -> str:
-        """The SQL Cube runs for each measure, so SQL written by hand can match it exactly."""
-        lines = []
-        for cube in model.cubes:
-            for measure in cube.measures:
-                member = f"{cube.name}.{measure.name}"
-                try:
-                    lines.append(f"-- {member}\n{runtime.cube.sql(runtime.cube_identity, {'measures': [member]})};")
-                except NovaError as error:
-                    lines.append(f"-- {member}: unavailable ({error.message})")
-        return "\n\n".join(lines)
-
     @reporting_failures
     def load_skill(name: str) -> str:
         """Load a skill: its guide, its semantic model (the definitions), and tested examples. Do
@@ -114,8 +103,9 @@ def make_source_tools(runtime: Runtime) -> list[BaseTool]:
             return f"{note}{body}\n\nThis skill has no semantic model yet: an administrator needs to profile it again."
         examples = json.dumps([e.model_dump(mode="json", exclude_defaults=True) for e in store.read_examples(name)],
                               indent=1)
-        return (f"{note}{body}\n\n## Semantic model\nThese are the definitions. Use them exactly.\n\n"
-                f"{describe_model(model)}\n\n## The SQL behind each measure\n```sql\n{measure_sql(model)}\n```\n\n"
+        return (f"{note}{body}\n\n## Semantic model\nThese are the definitions. Use them exactly, by their "
+                f"cube.member names. `{{CUBE}}` in a definition means the cube's own rows.\n\n"
+                f"{wrap_untrusted(describe_model(model, with_sql=True))}\n\n"
                 f"## Tested examples (semantic queries)\n```json\n{examples}\n```")
 
     @reporting_failures

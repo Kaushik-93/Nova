@@ -15,7 +15,6 @@ up: env ## Build and start the whole stack, seeded, and wait until it is healthy
 	  echo; \
 	  echo "Nova is up."; \
 	  echo "  Nova      $$NOVA_UI_ORIGIN  (user: $$NOVA_ADMIN_EMAIL, password in .env)"; \
-	  echo "  Superset  $$SUPERSET_PUBLIC_URL  (user: $$SUPERSET_ADMIN_USER, password in .env)"; \
 	  echo "  Trino     http://localhost:$$TRINO_HOST_PORT"
 
 down: ## Stop the stack, keeping data
@@ -24,7 +23,7 @@ down: ## Stop the stack, keeping data
 reset: ## Stop the stack and delete all of its data
 	$(COMPOSE) down -v --remove-orphans
 
-logs: ## Follow logs (make logs s=superset for one service)
+logs: ## Follow logs (make logs s=cube for one service)
 	$(COMPOSE) logs -f $(s)
 
 ps: ## Show service status

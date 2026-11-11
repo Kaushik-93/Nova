@@ -64,7 +64,7 @@ def explain(model_seconds: float, tool_seconds: float, turns: int, repairs: int,
     if total:
         average = model_seconds / turns
         notes.append(f"{model_seconds / total:.0%} of the working time was waiting for the model: {turns} calls, "
-                     f"about {average:.0f}s each. Data and Superset took {tool_seconds:.0f}s.")
+                     f"about {average:.0f}s each. Data and the semantic layer took {tool_seconds:.0f}s.")
     if repairs:
         notes.append(f"The verifier ran {repairs + 1} times, so {repairs} repair round{'s' if repairs > 1 else ''} "
                      "repeated earlier work. This is usually the biggest avoidable cost.")

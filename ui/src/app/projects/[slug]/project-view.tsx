@@ -1,17 +1,17 @@
 "use client";
 
-import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, MessageSquare, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, MessageSquare, Pencil, Plus, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
-import { DashboardEmbed } from "@/components/dashboard-embed";
+import { Sheet } from "@/components/sheet";
 import { EmptyState, ErrorState, Loading } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/ui/confirm-button";
 import { Input } from "@/components/ui/field";
-import { api, type Config, type Project } from "@/lib/api";
+import { api, type Project } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
@@ -35,12 +35,11 @@ export function ProjectView() {
   const router = useRouter();
   const { user } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
-  const [config, setConfig] = useState<Config | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<"project" | "sheet" | null>(null);
 
   const load = useCallback(() => api.project(slug).then(setProject).catch((cause) => setError(cause.message)), [slug]);
-  useEffect(() => { load(); api.config().then(setConfig).catch(() => undefined); }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   if (!project) return error ? <div className="p-6"><ErrorState message={error} /></div> : <Loading />;
 
@@ -120,7 +119,7 @@ export function ProjectView() {
 
       {error && <div className="p-3"><ErrorState message={error} /></div>}
 
-      {sheet && (project.can_edit || config?.superset_url) && (
+      {sheet && project.can_edit && (
         <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-3">
           {project.can_edit && renaming === "sheet" ? (
             <RenameForm value={sheet.name} label="Sheet name" onCancel={() => setRenaming(null)} onSave={(name) => act(() => api.changeSheet(slug, sheet.slug, name))} />
@@ -135,16 +134,11 @@ export function ProjectView() {
               </ConfirmButton>
             </>
           )}
-          {config?.superset_url && (
-            <a className={cn(TAB_LINK, "ml-auto")} href={`${config.superset_url}/superset/dashboard/${sheet.slug}/`} target="_blank" rel="noreferrer">
-              Open in Superset <ExternalLink className="size-3" />
-            </a>
-          )}
         </div>
       )}
 
-      <div className="min-h-0 flex-1">
-        {sheet ? <DashboardEmbed key={sheet.slug} slug={sheet.slug} onSelection={() => undefined} /> : (
+      <div className="min-h-0 flex-1 overflow-auto">
+        {sheet ? <Sheet key={sheet.slug} slug={sheet.slug} /> : (
           <div className="mx-auto max-w-lg p-8">
             <EmptyState title="No sheets yet">
               {project.can_edit && <Link className="font-medium text-primary" href={`/builder?project=${slug}`}>Build the first sheet</Link>}

@@ -18,7 +18,7 @@ export type Stage = { key: string; agent: string; steps: Step[]; seconds: number
 
 export const AGENT_NAMES: Record<string, string> = {
   main: "Nova",
-  sql_author: "SQL author",
+  modeler: "Modeler",
   chart_designer: "Chart designer",
   verifier: "Verifier",
   profiler: "Profiler",
@@ -42,15 +42,15 @@ const TOOL_LABELS: Record<string, string> = {
   glob: "Searching files",
   grep: "Searching files",
   task: "Delegating",
-  superset_build_status: "Checking what's built",
-  superset_create_dataset: "Creating a dataset",
-  superset_create_chart: "Creating a chart",
-  superset_create_dashboard: "Creating the dashboard",
-  superset_update_dashboard: "Updating the dashboard",
-  superset_get_dashboard: "Reading the dashboard",
-  superset_get_chart_data: "Checking a chart's data",
+  semantic_query: "Asking the semantic layer",
+  add_definition: "Adding a definition",
+  create_chart: "Creating a chart",
+  remove_chart: "Removing a chart",
+  set_layout: "Laying out the dashboard",
+  get_dashboard: "Reading the dashboard",
+  inspect_dashboard: "Inspecting the dashboard",
+  get_chart_data: "Checking a chart's data",
   render_dashboard_screenshot: "Opening it in a real browser",
-  superset_guest_token: "Preparing the embed",
   finish_dashboard: "Running the final checks",
 };
 
@@ -138,12 +138,12 @@ export type Milestone = { id: string; label: string; state: MilestoneState; seco
 const MILESTONES = [
   { id: "understand", label: "Understanding your data" },
   { id: "plan", label: "Planning the dashboard" },
-  { id: "data", label: "Preparing the data" },
+  { id: "data", label: "Checking the definitions" },
   { id: "charts", label: "Building charts" },
   { id: "verify", label: "Verifying the numbers" },
   { id: "finish", label: "Final checks" },
 ];
-const DELEGATED: Record<string, number> = { sql_author: 2, chart_designer: 3, verifier: 4 };
+const DELEGATED: Record<string, number> = { modeler: 2, chart_designer: 3, verifier: 4 };
 
 /** The run as six plain stages, for people who don't want the raw steps. */
 export function toMilestones(events: RunEvent[], status: string | undefined, now: number): Milestone[] {

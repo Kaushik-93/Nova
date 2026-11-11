@@ -1,10 +1,11 @@
 "use client";
 
-import { Plus, Shield } from "lucide-react";
+import { Plus, Shield, Users } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { AccessEditor } from "@/app/users/access-editor";
-import { EmptyState, ErrorState, Loading, PageHeader } from "@/components/states";
+import { Page } from "@/components/page";
+import { EmptyState, ErrorState, Loading } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -96,10 +97,8 @@ export default function UsersPage() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 p-8">
-      <PageHeader title="People" description="Who can sign in and what they can read. Nobody sees any data until you give them access.">
-        <Button variant="outline" size="sm" onClick={() => setAdding(!adding)}><Plus className="size-3.5" /> Add person</Button>
-      </PageHeader>
+    <Page title="People" icon={<Users className="size-4" />} width="narrow"
+      description="Who can sign in and what they can read. Nobody sees any data until you give them access." actions={<><Button variant="outline" size="sm" onClick={() => setAdding(!adding)}><Plus className="size-3.5" /> Add person</Button></>}>
       {error && <ErrorState message={error} />}
       {adding && <NewUserForm onError={setError} onCreated={() => { setAdding(false); setError(null); load(); }} />}
       {!users && !error && <Loading />}
@@ -141,6 +140,6 @@ export default function UsersPage() {
           ))}
         </Card>
       )}
-    </div>
+    </Page>
   );
 }

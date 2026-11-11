@@ -13,7 +13,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
-from urllib.parse import quote
 
 import psycopg
 import pymysql
@@ -97,15 +96,14 @@ class Connector:
     dialect: str
     default_port: int
     jdbc_url: Callable[[Connection], str]
-    superset_driver: str
     test: Callable[[Connection], TestResult]
 
 
 CONNECTORS = {
     "postgres": Connector("postgresql", "postgres", 5432, lambda c: f"jdbc:postgresql://{c.host}:{c.port}/{c.database}",
-                          "postgresql+psycopg2", _test_postgres),
+                          _test_postgres),
     "mysql": Connector("mysql", "mysql", 3306, lambda c: f"jdbc:mysql://{c.host}:{c.port}",
-                       "mysql+pymysql", _test_mysql),
+                       _test_mysql),
 }
 
 
@@ -143,12 +141,6 @@ def create_catalog_sql(connection: Connection, *, catalog: str, trino_secrets_di
             f'"connection-url" = \'{connector.jdbc_url(connection)}\', '
             f'"credential-provider.type" = \'FILE\', '
             f'"connection-credential-file" = \'{trino_secrets_dir}/{catalog}.properties\')')
-
-
-def superset_uri(connection: Connection) -> str:
-    driver = CONNECTORS[connection.kind].superset_driver
-    password = quote(connection.password.get_secret_value(), safe="")
-    return f"{driver}://{quote(connection.username, safe='')}:{password}@{connection.host}:{connection.port}/{connection.database}"
 
 
 def encrypt_credentials(connection: Connection, key: str) -> str:

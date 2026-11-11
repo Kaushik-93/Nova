@@ -13,8 +13,7 @@ from agent.llm import build_model
 
 
 def settings(provider: str, name: str) -> Settings:
-    return Settings(model_provider=provider, model_name=name, superset_url="http://x", superset_admin_user="a",
-                    superset_admin_password="b")
+    return Settings(model_provider=provider, model_name=name)
 
 
 def test_openai_uses_the_responses_api(monkeypatch):
@@ -125,7 +124,8 @@ def test_a_failing_tool_reports_why():
 @pytest.mark.parametrize("name, args, expected", [
     ("load_skill", {"name": "demo-rental"}, "demo-rental"),
     ("task", {"subagent_type": "verifier", "description": "Check it"}, "verifier: Check it"),
-    ("superset_create_chart", {"spec": {"title": "Revenue"}}, "Revenue"),
+    ("create_chart", {"spec": {"title": "Revenue"}}, "Revenue"),
+    ("semantic_query", {"query": {"measures": ["c.revenue"], "dimensions": ["c.region"]}}, "c.revenue, c.region"),
     ("run_readonly_sql", {"sql": "SELECT\n  1"}, "SELECT 1"),
     ("something_else", {"secret": "x"}, ""),
 ])

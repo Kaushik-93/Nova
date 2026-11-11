@@ -8,7 +8,6 @@ import { useRun } from "@/lib/use-run";
 import { cn } from "@/lib/utils";
 
 const STEPS = [
-  { key: "superset", label: "Registering it with Superset" },
   { key: "catalog", label: "Adding it to the query engine" },
   { key: "profile", label: "Learning the data" },
 ] as const;

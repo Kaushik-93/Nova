@@ -21,7 +21,7 @@ MAX_DETAIL = 400
 # Which argument says what a tool call is doing, for the live view.
 DETAIL_FIELDS = {
     "load_skill": "name", "check_skill_freshness": "name", "introspect_schema": "catalog", "sample_table": "table",
-    "superset_create_dataset": "key", "superset_get_chart_data": "chart_id", "superset_create_dashboard": "title",
+    "get_chart_data": "key", "remove_chart": "key", "set_layout": "title", "add_definition": "cube",
     "run_readonly_sql": "sql", "write_file": "file_path", "read_file": "file_path", "submit_plan": "title",
     "ask_user": "question", "finish_dashboard": "summary",
 }
@@ -31,8 +31,11 @@ def describe_call(name: str, args: dict[str, Any]) -> str:
     """One line saying what a tool call is doing."""
     if name == "task":
         return f"{args.get('subagent_type', '')}: {args.get('description', '')}"[:MAX_DETAIL]
-    if name == "superset_create_chart":
+    if name == "create_chart":
         return str((args.get("spec") or {}).get("title", ""))[:MAX_DETAIL]
+    if name == "semantic_query":
+        query = args.get("query") or {}
+        return ", ".join([*query.get("measures", []), *query.get("dimensions", [])])[:MAX_DETAIL]
     field = DETAIL_FIELDS.get(name)
     return " ".join(str(args.get(field, "")).split())[:MAX_DETAIL] if field else ""
 

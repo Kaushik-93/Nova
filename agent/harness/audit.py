@@ -1,4 +1,4 @@
-"""The audit log: every SQL statement and every Superset write, including the ones
+"""The audit log: every SQL statement and every semantic query a run makes, including the ones
 refused, with who and which run. Written to Postgres and to the JSON logs."""
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ logger = logging.getLogger("nova.audit")
 
 class AuditKind(StrEnum):
     SQL = "sql"
-    SUPERSET_WRITE = "superset_write"
+    SEMANTIC_QUERY = "semantic_query"  # a query through Cube; older logs also hold superset_write
 
 
 class AuditStatus(StrEnum):

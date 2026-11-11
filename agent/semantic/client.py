@@ -17,7 +17,9 @@ import jwt
 from pydantic import BaseModel, Field
 
 from agent.harness.access import UserAccess
-from agent.harness.errors import ConnectionFailure, InvalidRequest, PermissionFailure, QueryFailure, QueryTimedOut
+from agent.harness.audit import AuditKind, AuditLog, AuditStatus, RunContext
+from agent.harness.errors import (ConnectionFailure, InvalidRequest, NovaError, PermissionFailure, QueryFailure,
+                                  QueryTimedOut)
 from agent.tools.sources import Source
 
 TOKEN_SECONDS = 60
@@ -110,6 +112,39 @@ class CubeClient:
                 raise QueryFailure(f"Cube answered {response.status_code}")
             return body
 
+
+
+def cubes_of(query: dict[str, Any]) -> list[str]:
+    """The cubes a query in Cube's format reads, from every member it names."""
+    members = [*query.get("measures", []), *query.get("dimensions", []), *query.get("segments", []),
+               *(item.get("dimension", "") for item in query.get("timeDimensions", [])),
+               *(item.get("member", "") for item in query.get("filters", []))]
+    return sorted({member.split(".")[0] for member in members if member})
+
+
+class AuditedCubeClient(CubeClient):
+    """Cube, as an agent run uses it: every query it loads goes in the audit log, like its SQL does,
+    with what was asked, as whom, and how many rows came back or why it was refused."""
+
+    def __init__(self, url: str, secret: str, *, audit: AuditLog, context: RunContext, timeout_seconds: float = 60) -> None:
+        super().__init__(url, secret, timeout_seconds=timeout_seconds)
+        self._audit = audit
+        self._context = context
+
+    def load(self, identity: CubeIdentity, query: dict[str, Any]) -> CubeResult:
+        started = time.monotonic()
+        record = dict(target=",".join(cubes_of(query)), statement=json.dumps(query, sort_keys=True))
+        who = {"model": identity.model, "catalogs": identity.catalogs, "scopes": identity.scopes}
+        try:
+            result = super().load(identity, query)
+        except NovaError as error:
+            status = AuditStatus.REJECTED if isinstance(error, PermissionFailure) else AuditStatus.FAILED
+            self._audit.record(self._context, AuditKind.SEMANTIC_QUERY, status, **record,
+                               elapsed_ms=int((time.monotonic() - started) * 1000), detail={**who, "reason": error.message})
+            raise
+        self._audit.record(self._context, AuditKind.SEMANTIC_QUERY, AuditStatus.OK, **record, rows=len(result.data),
+                           elapsed_ms=int((time.monotonic() - started) * 1000), detail=who)
+        return result
 
 def _translate(message: str, status: int) -> Exception:
     text = message.removeprefix("Error: ").strip()

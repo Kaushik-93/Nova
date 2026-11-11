@@ -1,4 +1,4 @@
-"""Connecting a source from the API, for real: a new Trino catalog, a Superset database, and
+"""Connecting a source from the API, for real: a new Trino catalog, and
 encrypted credentials. Only the model is replaced, since profiling has its own tests in tests/llm."""
 
 import os
@@ -65,10 +65,8 @@ def connected(client):
         services.executor.run_internal(f"DROP CATALOG IF EXISTS {catalog}", context=context, purpose="test cleanup")
         Path(services.settings.nova_trino_secrets_dir, f"{catalog}.properties").unlink(missing_ok=True)
         with services.pool.connection() as conn:
-            row = conn.execute("DELETE FROM sources WHERE slug = %s RETURNING superset_database_id", (slug,)).fetchone()
+            conn.execute("DELETE FROM sources WHERE slug = %s", (slug,))
             conn.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))
-        if row and row[0]:
-            services.superset.delete_database(row[0])
 
 
 def test_a_read_only_login_is_recognised(client):
@@ -142,15 +140,6 @@ def test_credentials_are_encrypted_in_the_database(client, connected):
     assert decrypt_credentials(stored, services.settings.fernet_key)["username"] == "nova_ro"
 
 
-def test_the_source_is_registered_in_superset(client, connected):
-    services = client.app.state.services
-    with services.pool.connection() as conn:
-        database_id = conn.execute("SELECT superset_database_id FROM sources WHERE slug = %s", (connected["slug"],)).fetchone()[0]
-    detail = services.superset._call("GET", f"/api/v1/database/{database_id}").json()["result"]
-    assert detail["database_name"] == connected["name"]
-    assert os.environ["DEMO_RO_PASSWORD"] not in str(detail)
-
-
 def test_the_source_is_ready_and_nothing_secret_comes_back(client, connected):
     source = next(item for item in client.get("/api/sources").json() if item["slug"] == connected["slug"])
     assert (source["status"], source["read_only"], source["kind"]) == ("ready", True, "postgres")
@@ -163,7 +152,7 @@ def test_progress_can_be_followed(client, connected):
     run = client.get(f"/api/runs/{connected['run_id']}").json()
     assert run["kind"] == "job"
     steps = [event.get("step") or event["event"] for event in client.app.state.services.runs.events(connected["run_id"])]
-    assert steps == ["superset", "catalog", "profile", "profile_table", "done"]
+    assert steps == ["catalog", "profile", "profile_table", "done"]
     assert os.environ["DEMO_RO_PASSWORD"] not in str(client.app.state.services.runs.events(connected["run_id"]))
 
 
@@ -216,10 +205,8 @@ def test_a_failed_profile_marks_the_source_failed_and_can_be_retried(client):
         services.executor.run_internal(f"DROP CATALOG IF EXISTS {catalog}", context=context, purpose="test cleanup")
         Path(services.settings.nova_trino_secrets_dir, f"{catalog}.properties").unlink(missing_ok=True)
         with services.pool.connection() as conn:
-            row = conn.execute("DELETE FROM sources WHERE slug = %s RETURNING superset_database_id", (slug,)).fetchone()
+            conn.execute("DELETE FROM sources WHERE slug = %s", (slug,))
             conn.execute("DELETE FROM runs WHERE run_id = ANY(%s)", (run_ids,))
-        if row and row[0]:
-            services.superset.delete_database(row[0])
 
 
 def test_a_failed_source_is_kept_away_from_the_agent(client):

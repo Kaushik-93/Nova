@@ -1,3 +1,5 @@
+import type { ChartData, DashboardSpec } from "@/lib/charts";
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:18000";
 
 export type RunEvent = {
@@ -6,12 +8,11 @@ export type RunEvent = {
   agent: string;
   event: "model_start" | "model" | "tool_start" | "tool_end" | "tool_blocked" | "plan" | "chart_ready"
     | "dashboard_ready" | "dashboard_updated" | "connect_step" | "profile_table";
-  step?: "superset" | "catalog" | "profile" | "done";
+  step?: "catalog" | "profile" | "done";
   table?: string;
   done?: number;
   total?: number;
   plan?: Plan;
-  chart_id?: number;
   key?: string;
   title?: string;
   viz?: string;
@@ -45,12 +46,14 @@ export type PlannedChart = {
   key: string;
   title: string;
   viz: string;
-  metric: string;
+  measures: string[];
   dimensions: string[];
-  time_grain: string | null;
+  grain: string | null;
+  window?: string | null;
   width?: number;
 };
-export type Plan = { title: string; goal: string; sources: string[]; charts: PlannedChart[]; filters: string[]; assumptions: string[] };
+export type Plan = { title: string; goal: string; sources: string[]; charts: PlannedChart[]; filters: string[]; assumptions: string[];
+  new_definitions?: string[] };
 
 export type RunResult = {
   status: string;
@@ -85,22 +88,9 @@ export type RunListItem = {
   title: string | null;
   summary: string | null;
 };
-export type ChartPreview = {
-  chart_id: number;
-  title: string;
-  viz: string;
-  columns: string[];
-  rows: Record<string, unknown>[];
-  row_count: number;
-  x_axis: string | null;
-  groupby: string[];
-  time_grain: string | null;
-  format: string | null;
-};
 export type DashboardRow = {
   slug: string;
   thread_id: string;
-  superset_id: number;
   title: string;
   summary: string;
   updated_at: string;
@@ -120,13 +110,17 @@ export type Project = {
   can_edit: boolean;
   sheets: ProjectSheet[];
 };
-export type EmbedInfo = {
+export type DashboardDetail = {
   slug: string;
+  thread_id: string;
   title: string;
-  embed_uuid: string;
-  guest_token: string;
-  superset_url: string;
-  filters: { id: string; name: string; column: string | null }[];
+  summary: string;
+  updated_at: string;
+  spec: DashboardSpec | null;
+  needs_rebuild: boolean;
+  prompt: string | null;
+  can_edit: boolean;
+  project: { slug: string; name: string } | null;
 };
 export type SourceRow = {
   slug: string;
@@ -159,7 +153,44 @@ export type Tenancy = {
   tables: string[];
 };
 export type TenantOption = { id: string; name: string };
-export type Metric = { label: string; sql: string; base: string; filters: string[]; unit: string | null; description: string | null; status: string };
+export type MemberStatus = "inferred" | "reviewed";
+export type SemanticMember = {
+  name: string; // cube.member
+  short_name: string;
+  title: string;
+  description: string | null;
+  type: string; // string, number, time, boolean; or a measure's count, sum, avg…
+  format: string | null;
+  unit: string | null;
+  status: MemberStatus;
+  reviewed_by: string | null;
+  sql: string | null;
+  filters: string[];
+};
+export type SemanticCube = {
+  name: string;
+  title: string;
+  description: string | null;
+  source: string; // its table, or the SELECT it reads
+  measures: SemanticMember[];
+  dimensions: SemanticMember[];
+  segments: { name: string; title: string; description: string | null }[];
+  joins: { cube: string; relationship: string }[];
+};
+export type SemanticSource = { source: string; display_name: string; catalog: string; cubes: SemanticCube[] };
+export type QueryFilter = { member: string; operator: string; values: string[] };
+export type SemanticQuery = {
+  measures?: string[];
+  dimensions?: string[];
+  time_dimensions?: { dimension: string; granularity?: string | null; date_range?: string[] | null }[];
+  filters?: QueryFilter[];
+  segments?: string[];
+  order?: { member: string; direction: "asc" | "desc" }[];
+  limit?: number | null;
+};
+export type QueryResult = { columns: string[]; rows: Record<string, unknown>[]; row_count: number; certified: boolean;
+  annotation: Record<string, Record<string, { title?: string; shortTitle?: string; type?: string; format?: string }>> };
+export type Proposal = { index: number; cube: string; member: { name: string; title?: string; type: string; sql?: string; description?: string }; reason: string };
 export type Skill = {
   name: string;
   description: string;
@@ -168,23 +199,30 @@ export type Skill = {
   generated_at: string;
   reviewed_by: string | null;
   guide: string;
-  metrics: Record<string, Metric>;
-  proposed: Record<string, Metric>;
+  cubes: SemanticCube[];
+  access: Record<string, { tenant_dimension?: string; shared?: boolean }>;
+  proposals: Proposal[];
+  example_queries: { question: string; query: SemanticQuery }[];
   gotchas: { kind: string; table: string; column: string; detail: string }[];
   tables: { name: string; rows: number | null }[];
-  examples: string;
   changelog: string;
 };
-export type Config = { superset_url: string | null; model: string; provider: string };
+export type Config = { model: string; provider: string };
+
+let renderToken: string | null = null;
+/** The renderer opens a dashboard with a short-lived token rather than a session. */
+export function setRenderToken(token: string | null) {
+  renderToken = token;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: "include", // the session is an HttpOnly cookie, which this page can't read
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { "Content-Type": "application/json", ...(renderToken ? { Authorization: `Bearer ${renderToken}` } : {}), ...init?.headers },
     cache: "no-store",
   });
-  if (response.status === 401 && path !== "/api/auth/login" && window.location.pathname !== "/login") {
+  if (response.status === 401 && !renderToken && path !== "/api/auth/login" && window.location.pathname !== "/login") {
     window.location.assign("/login");
   }
   if (!response.ok) {
@@ -222,8 +260,10 @@ export const api = {
   changeSheet: (slug: string, sheet: string, name: string) =>
     request<Project>(`/api/projects/${slug}/sheets/${sheet}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteSheet: (slug: string, sheet: string) => request(`/api/projects/${slug}/sheets/${sheet}`, { method: "DELETE" }),
-  embed: (slug: string) => request<EmbedInfo>(`/api/dashboards/${slug}/embed`),
-  chartPreview: (chartId: number) => request<ChartPreview>(`/api/charts/${chartId}/preview`),
+  dashboard: (slug: string) => request<DashboardDetail>(`/api/dashboards/${slug}`),
+  chartData: (slug: string, key: string, body: { filters: Record<string, string[]>; date_range: string[] | null }) =>
+    request<ChartData>(`/api/dashboards/${slug}/charts/${key}/data`, { method: "POST", body: JSON.stringify(body) }),
+  filterOptions: (slug: string, name: string) => request<string[]>(`/api/dashboards/${slug}/filters/${encodeURIComponent(name)}/options`),
   sources: () => request<SourceRow[]>("/api/sources"),
   demoSources: () => request<DemoSource[]>("/api/sources/demos"),
   connectDemo: (slug: string) => request<Started>(`/api/sources/demos/${slug}`, { method: "POST" }),
@@ -243,4 +283,25 @@ export const api = {
     request<AccessEntry[]>(`/api/users/${id}/access`, { method: "PUT", body: JSON.stringify(entries) }),
   skill: (slug: string) => request<Skill>(`/api/skills/${slug}`),
   approveSkill: (slug: string) => request(`/api/skills/${slug}/approve`, { method: "POST", body: "{}" }),
+  approveMember: (slug: string, member: string) => {
+    const [cube, name] = member.split(".");
+    return request(`/api/skills/${slug}/members/${cube}/${name}/approve`, { method: "POST", body: "{}" });
+  },
+  decideProposal: (slug: string, index: number, accept: boolean) =>
+    request(`/api/skills/${slug}/proposals/${index}`, { method: "POST", body: JSON.stringify({ accept }) }),
+  semanticMeta: () => request<SemanticSource[]>("/api/semantic/meta"),
+  semanticQuery: (query: SemanticQuery) => request<QueryResult>("/api/semantic/query", { method: "POST", body: JSON.stringify({ query }) }),
+  semanticSql: (query: SemanticQuery) => request<{ sql: string }>("/api/semantic/sql", { method: "POST", body: JSON.stringify({ query }) }),
 };
+
+/** A query's results as a CSV download. Fetched rather than linked, because it's a POST with the session. */
+export async function downloadCsv(query: SemanticQuery, filename = "nova-query.csv") {
+  const response = await fetch(`${API_URL}/api/semantic/csv`, {
+    method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }),
+  });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? `The API returned ${response.status}`);
+  const url = URL.createObjectURL(await response.blob());
+  const link = Object.assign(document.createElement("a"), { href: url, download: filename });
+  link.click();
+  URL.revokeObjectURL(url);
+}

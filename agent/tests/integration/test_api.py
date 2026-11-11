@@ -1,4 +1,4 @@
-"""The HTTP API on the real database and Superset. The model isn't involved: `run_dashboard`
+"""The HTTP API on the real database and Cube. The model isn't involved: `run_dashboard`
 is replaced by a stub for these tests, and the real thing is tested in tests/llm."""
 
 import json
@@ -13,7 +13,6 @@ from agent.api.main import create_app
 from agent.api.runs import RunManager
 from agent.config import get_settings
 from agent.dashboard_agent import RunResult, RunStatus
-from agent.tools.superset_payloads import ChartSpec, Metric, Viz
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +31,7 @@ class FakeRun:
         sink({"event": "model_start", "agent": "main"})
         self.release.wait(10)
         sink({"event": "model", "agent": "main", "seconds": 2, "tokens": 50, "tools": [], "text": "done"})
-        return RunResult(status=self.result, thread_id=thread_id, run_id=context.run_id, title="T", guest_token="secret-token")
+        return RunResult(status=self.result, thread_id=thread_id, run_id=context.run_id, title="T")
 
 
 @pytest.fixture(scope="module")
@@ -68,10 +67,10 @@ def test_health(client):
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
-def test_config_tells_the_ui_where_superset_is_and_no_secrets(client):
+def test_config_names_the_model_and_no_secrets(client):
     config = client.get("/api/config").json()
-    assert config["superset_url"].startswith("http://localhost")
-    assert get_settings().superset_admin_password not in json.dumps(config)
+    assert set(config) == {"model", "provider"}
+    assert get_settings().cubejs_api_secret not in json.dumps(config)
 
 
 def test_a_run_starts_and_finishes(client, fake):
@@ -95,12 +94,6 @@ def test_the_stream_replays_after_a_reconnect(client, fake):
     with client.stream("GET", f"/api/runs/{run_id}/events", params={"after": first}) as stream:
         steps = [line for line in stream.iter_lines() if line == "event: step"]
     assert len(steps) == 1
-
-
-def test_the_guest_token_is_never_stored_with_a_run(client, fake):
-    run_id = client.post("/api/runs", json={"prompt": "p"}).json()["run_id"]
-    wait_for(client, run_id)
-    assert "secret-token" not in json.dumps(client.get(f"/api/runs/{run_id}").json())
 
 
 def test_timing_comes_with_the_run(client, fake):
@@ -183,31 +176,5 @@ def test_a_skill_is_served_with_its_definitions(client):
     assert all(cube["measures"] or cube["dimensions"] for cube in skill["cubes"])
 
 
-def test_a_chart_built_by_nova_can_be_previewed(client):
-    services = client.app.state.services
-    key = f"preview-{uuid.uuid4().hex[:8]}"
-    database = services.superset.database_id("Nova Trino")
-    dataset = services.superset.ensure_dataset(key=key, name=key, database_id=database, sql="""
-        SELECT r.region_name, CAST(o.order_ts AS timestamp(3)) AS order_ts, o.tax_cents / 100.0 AS revenue
-        FROM demo_shop.shop.orders o JOIN demo_shop.shop.regions r ON r.region_id = o.region_id""")
-    spec = ChartSpec(key="by-region", title="By region", viz=Viz.BAR, dimensions=["region_name"], y_axis_format="$,.0f",
-                     metrics=[Metric(label="Revenue", sql="SUM(revenue)")])
-    chart = services.superset.ensure_chart(spec, dataset_id=dataset.id, dashboard_key=key)
-    try:
-        preview = client.get(f"/api/charts/{chart.id}/preview").json()
-        assert preview["viz"] == "echarts_timeseries_bar"
-        assert preview["x_axis"] == "region_name"
-        assert preview["format"] == "$,.0f"
-        assert preview["row_count"] == 8
-        assert preview["columns"] == ["region_name", "Revenue"]
-    finally:
-        services.superset.delete_chart(chart.id)
-        services.superset.delete_dataset(dataset.id)
-
-
-def test_only_charts_nova_built_can_be_previewed(client):
-    assert client.get("/api/charts/999999/preview").status_code == 404
-
-
 def test_an_unknown_dashboard_is_404(client):
-    assert client.get("/api/dashboards/nope/embed").status_code == 404
+    assert client.get("/api/dashboards/nope").status_code == 404

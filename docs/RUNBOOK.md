@@ -22,9 +22,18 @@ Give Docker at least 8 GB of memory. The current stack uses about 2.5 GB when id
 s=<service>`.
 
 **A port is already in use.** Change the matching `*_HOST_PORT` in `.env` and run
-`make up` again. If you change `SUPERSET_HOST_PORT`, change `SUPERSET_PUBLIC_URL` too.
-Changing the UI port means updating `NOVA_UI_ORIGIN`, because Superset only lets that
-origin frame dashboards.
+`make up` again. Changing the UI port means updating `NOVA_UI_ORIGIN`, because the API only
+accepts requests from that origin, and the dashboard renderer opens pages there.
+
+**Upgrading from a version with Superset.** Run `make up`: it removes the Superset and Redis
+containers (`--remove-orphans`), and Nova drops its Superset columns itself. The metadata
+Postgres keeps an unused `superset` database, which `DROP DATABASE superset` removes. Sheets built in
+Superset show a **Rebuild** button, which builds them again from the request that made them.
+Profile each source again, from **Sources** or with `make skill`, to give it a semantic model.
+
+**A semantic model doesn't load.** Cube compiles every published model together, so one broken
+file stops all of them: `make logs s=cube` names it. Nova checks a model before publishing it, so
+this should only follow a hand edit under `skills/`.
 
 **Authentication errors after deleting `.env`.** The volumes still hold the old
 passwords. Run `make reset`, then `make up`.

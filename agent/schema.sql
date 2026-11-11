@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     occurred_at timestamptz NOT NULL DEFAULT now(),
     run_id      text NOT NULL,
     user_id     text NOT NULL,
-    kind        text NOT NULL CHECK (kind IN ('sql', 'superset_write')),
+    kind        text NOT NULL CHECK (kind IN ('sql', 'semantic_query', 'superset_write')),
     status      text NOT NULL CHECK (status IN ('ok', 'rejected', 'failed')),
     target      text NOT NULL DEFAULT '',
     statement   text NOT NULL DEFAULT '',
@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS audit_log_run_idx ON audit_log (run_id, id);
+
+-- Runs query Cube rather than writing to Superset. Rows from before keep their superset_write kind.
+ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_kind_check;
+ALTER TABLE audit_log ADD CONSTRAINT audit_log_kind_check CHECK (kind IN ('sql', 'semantic_query', 'superset_write'));
 
 CREATE TABLE IF NOT EXISTS sources (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,8 +46,6 @@ CREATE TABLE IF NOT EXISTS skills (
 CREATE TABLE IF NOT EXISTS dashboards (
     slug        text PRIMARY KEY,
     thread_id   text NOT NULL UNIQUE,
-    superset_id integer NOT NULL,
-    embed_uuid  text,
     title       text NOT NULL,
     summary     text NOT NULL DEFAULT '',
     created_by  text NOT NULL,
@@ -97,7 +99,6 @@ ALTER TABLE sources ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'postgre
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'ready';
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS read_only boolean;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS encrypted_credentials text;
-ALTER TABLE sources ADD COLUMN IF NOT EXISTS superset_database_id integer;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS tenant_column text;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS tenant_table text;
 ALTER TABLE sources ADD COLUMN IF NOT EXISTS tenant_label_column text;
@@ -149,3 +150,10 @@ BEGIN
         ALTER TABLE dashboards DROP COLUMN shared;
     END IF;
 END $$;
+
+-- Nova draws dashboards itself now. A dashboard is a spec, and each chart's numbers come from Cube
+-- for whoever opens it. Sheets built in Superset before have no spec, and are rebuilt from their prompt.
+ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS spec jsonb;
+ALTER TABLE dashboards DROP COLUMN IF EXISTS superset_id;
+ALTER TABLE dashboards DROP COLUMN IF EXISTS embed_uuid;
+ALTER TABLE sources DROP COLUMN IF EXISTS superset_database_id;

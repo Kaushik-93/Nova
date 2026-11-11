@@ -410,3 +410,32 @@ unique, is caught with plain SQL, because neither fails on its own: they silentl
 
 Definitions start as inferred. A person approves them in the catalog, and from then on re-profiling
 only proposes changes. A draft can't mark its own definitions reviewed: they're reset on submission.
+
+## D-061: Nova draws its own dashboards, and Superset is gone
+
+With Cube as the only path to data, a Superset chart would need a dataset of SQL beside the model,
+and embedding it needed guest tokens and a second set of permissions. A dashboard is now one
+`DashboardSpec` (`agent/semantic/charts.py`) stored in `dashboards.spec`: each chart is a semantic
+query plus how to draw it, and the UI draws it with ECharts. The rules a chart must follow (which
+measures and dimensions each type takes, single numbers in rows of their own) are checked in code.
+Sheets built in Superset keep their prompt and show a Rebuild button. Country maps were dropped
+because they need a shape file per country; the world map stays.
+
+## D-062: Chart data is fetched as the person looking
+
+`POST /api/dashboards/{slug}/charts/{key}/data` runs the chart through Cube with the viewer's own
+identity, so a shared dashboard shows everyone their own rows with nothing to set up, replacing guest
+tokens and `guest_rules`. Rolling windows are resolved to dates on every request, ending at the last
+complete period, so "the last 12 months" stays right next month. Which charts a dashboard filter
+reaches is worked out by asking Cube to compile each chart with the filter, not by matching columns.
+
+## D-063: The renderer opens Nova's own page with a token for one dashboard
+
+The verifier's screenshot loads `/render/dashboards/{slug}` with a two-minute token naming that
+dashboard and the run's user, so it sees exactly what that person would and can read nothing else.
+
+## D-064: A run's queries through Cube are audited
+
+Every Cube load an agent run makes is written to the audit log as `semantic_query`, with the query,
+the cubes it read, the identity's limits, and the rows returned or why it was refused, as its SQL
+already was. People opening dashboards aren't logged, just as viewing a Superset chart wasn't.

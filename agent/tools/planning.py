@@ -9,18 +9,20 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from agent.runtime import Runtime
-from agent.tools.superset_payloads import TimeGrain, Viz
+from agent.semantic.charts import Viz
+from agent.semantic.query import Granularity
 
 MAX_QUESTIONS = 1
 
 
 class PlannedChart(BaseModel):
-    key: str = Field(description="Short stable id, such as revenue-trend")
+    key: str = Field(description="Short stable id, snake_case, such as revenue_trend")
     title: str
     viz: Viz
-    metric: str = Field(description="Which metric, by its skill definition")
-    dimensions: list[str] = Field(default_factory=list)
-    time_grain: TimeGrain | None = None
+    measures: list[str] = Field(min_length=1, description="cube.measure names from the semantic model")
+    dimensions: list[str] = Field(default_factory=list, description="cube.dimension names")
+    grain: Granularity | None = Field(default=None, description="For trends: the period along the bottom")
+    window: str | None = Field(default=None, description="In words, such as 'the last 12 complete months'")
     filters: str | None = None
     width: int = Field(default=6, ge=1, le=12, description="Columns out of 12")
 
@@ -30,7 +32,9 @@ class DashboardPlan(BaseModel):
     goal: str = Field(description="The user's goal, restated")
     sources: list[str] = Field(min_length=1)
     charts: list[PlannedChart] = Field(min_length=1)
-    filters: list[str] = Field(default_factory=list, description="Native filters to offer")
+    filters: list[str] = Field(default_factory=list, description="Filters to offer, each with its cube.dimension")
+    new_definitions: list[str] = Field(default_factory=list, description="Measures or dimensions the model lacks and "
+                                                                         "the modeler must add, each with how it's defined")
     assumptions: list[str] = Field(default_factory=list)
 
 

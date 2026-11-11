@@ -16,29 +16,26 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from agent.api import auth, projects as project_routes, semantic as semantic_routes, sources as source_routes, users
+from agent.api import (auth, dashboards as dashboard_routes, projects as project_routes, semantic as semantic_routes,
+                       sources as source_routes, users)
 from agent.api.auth import LoginThrottle, User, check_secret, create_sso_client, current_user, ensure_admin, require_admin, require_builder
 from agent.api.runs import RunManager
 from agent.api.timing import summarise
 from agent.config import Settings, get_settings
 from agent.dashboard_agent import run_dashboard
 from agent.db import apply_schema, create_checkpointer, create_langgraph_pool, create_pool, create_store
-from agent.harness.access import UserAccess, guest_rules, load_access
 from agent.harness.audit import AuditLog
+from agent.harness.access import UserAccess, load_access
 from agent.harness.errors import ErrorCategory, NotFound, NovaError
+from agent.projects import can_edit, project_of_sheet
 from agent.harness.executor import SqlExecutor
 from agent.harness.logs import configure_logging
-from agent.harness.validators import chart_dataset_id
 from agent.llm import build_model
-from agent.projects import can_edit, can_view_sheet, load_projects, project_of_sheet
 from agent.semantic.client import CubeClient
 from agent.tools.skill_store import SkillStore
 from agent.tools.sources import list_sources
-from agent.tools.superset_client import SupersetClient
-from agent.tools.superset_payloads import CHART_KEY_PREFIX
 
 POLL_SECONDS = 0.5
-PREVIEW_ROWS = 200
 STATUS_BY_CATEGORY = {ErrorCategory.NOT_FOUND: 404, ErrorCategory.PERMISSION: 403, ErrorCategory.INVALID_REQUEST: 400}
 
 
@@ -66,8 +63,6 @@ class Services:
         self.checkpointer = create_checkpointer(self.graph_pool)
         self.long_term = create_store(self.graph_pool)
         self.skills = SkillStore(settings.nova_skills_dir, self.pool)
-        self.superset = SupersetClient(settings.superset_url, settings.superset_admin_user,
-                                       settings.superset_admin_password)
         self.cube = CubeClient(settings.cube_url, settings.cubejs_api_secret)
         self.audit = AuditLog(self.pool)
         self.executor = SqlExecutor(settings.trino_url, self.audit)
@@ -90,7 +85,6 @@ class Services:
 
     def close(self) -> None:
         self.runs.close()
-        self.superset.close()
         self.cube.close()
         self.pool.close()
         self.graph_pool.close()
@@ -117,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(project_routes.router)
     app.include_router(source_routes.router)
     app.include_router(semantic_routes.router)
+    app.include_router(dashboard_routes.router)
 
     @app.exception_handler(NovaError)
     async def nova_error(request: Request, error: NovaError) -> JSONResponse:
@@ -142,18 +137,6 @@ def create_app() -> FastAPI:
             raise NotFound(f"no run {run_id}")  # not 403, which would confirm it exists
         return run
 
-    def visible_dashboard(app_services: Services, slug: str, user: User) -> tuple:
-        project = project_of_sheet(app_services.pool, slug=slug)
-        sheet = next((item for item in project.sheets if item.slug == slug), None) if project else None
-        granted = set(app_services.access_of(user).readable_catalogs(list_sources(app_services.pool)))
-        if sheet is None or not can_view_sheet(project, sheet, email=user.email, role=user.role, granted=granted):
-            raise NotFound(f"no dashboard {slug}")  # not 403, which would confirm it exists
-        with app_services.pool.connection() as conn:
-            row = conn.execute("SELECT superset_id, embed_uuid, title, catalogs FROM dashboards WHERE slug = %s", (slug,)).fetchone()
-        if not row[1]:
-            raise NotFound(f"no dashboard {slug}")
-        return row
-
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -161,8 +144,7 @@ def create_app() -> FastAPI:
     @app.get("/api/config")
     def config(request: Request, user: User = Depends(current_user)) -> dict[str, Any]:
         settings = services(request).settings
-        return {"superset_url": settings.superset_public_url if user.role == "admin" else None, "model": settings.model_name,
-                "provider": settings.model_provider}
+        return {"model": settings.model_name, "provider": settings.model_provider}
 
     # --- Runs -----------------------------------------------------------------
 
@@ -222,59 +204,6 @@ def create_app() -> FastAPI:
                 await asyncio.sleep(POLL_SECONDS)
 
         return EventSourceResponse(generate())
-
-    # --- Dashboards -----------------------------------------------------------
-
-    @app.get("/api/dashboards")
-    def list_dashboards(request: Request, user: User = Depends(current_user)) -> list[dict[str, Any]]:
-        """Every sheet this person can see, newest first, whichever project it's in."""
-        app_services = services(request)
-        granted = set(app_services.access_of(user).readable_catalogs(list_sources(app_services.pool)))
-        rows = [{"slug": sheet.slug, "thread_id": sheet.thread_id, "superset_id": sheet.superset_id, "title": sheet.title,
-                 "summary": sheet.summary, "created_by": sheet.created_by, "updated_at": sheet.updated_at,
-                 "sheet_name": sheet.name, "project_slug": project.slug, "project_name": project.name}
-                for project in load_projects(app_services.pool) for sheet in project.sheets
-                if can_view_sheet(project, sheet, email=user.email, role=user.role, granted=granted)]
-        return sorted(rows, key=lambda row: row["updated_at"], reverse=True)
-
-    @app.get("/api/dashboards/{slug}/embed")
-    def embed_dashboard(slug: str, request: Request, user: User = Depends(current_user)) -> dict[str, Any]:
-        """What the browser needs to show a dashboard. The token is short-lived and made for this
-        user, with their row rules in it, so a shared dashboard shows each person their own data.
-        The SDK asks for a new one here whenever it needs to."""
-        app_services = services(request)
-        superset_id, embed_uuid, title, catalogs = visible_dashboard(app_services, slug, user)
-        rules = guest_rules(app_services.access_of(user), list_sources(app_services.pool), list(catalogs), app_services.skills)
-        metadata = json.loads(app_services.superset.dashboard_detail(superset_id).get("json_metadata") or "{}")
-        filters = [{"id": native["id"], "name": native["name"],
-                    "column": ((native.get("targets") or [{}])[0].get("column") or {}).get("name")}
-                   for native in metadata.get("native_filter_configuration") or []]
-        return {"slug": slug, "title": title, "embed_uuid": embed_uuid, "filters": filters,
-                "superset_url": app_services.settings.superset_public_url,
-                "guest_token": app_services.superset.guest_token(embed_uuid, username=user.email, rls=rules)}
-
-    @app.get("/api/charts/{chart_id}/preview")
-    def chart_preview(chart_id: int, request: Request, user: User = Depends(require_builder)) -> dict[str, Any]:
-        """A chart's data, for the live preview while a dashboard is being built. It's read from
-        Superset here rather than kept in the run's events, so no data is copied. Superset is
-        reached as an admin, so this only serves the charts of someone's own build, whose
-        datasets already hold their row scope."""
-        app_services = services(request)
-        superset = app_services.superset
-        detail = superset.chart_detail(chart_id)
-        dataset_id = chart_dataset_id(detail)
-        if not (detail.get("description") or "").startswith(CHART_KEY_PREFIX) or dataset_id is None:
-            raise NotFound(f"chart {chart_id} wasn't built by Nova")
-        key = superset.get_dataset(dataset_id).table_name.split("__")[0]
-        if user.role != "admin" and not app_services.runs.owns_dashboard_key(key, user.email):
-            raise NotFound(f"chart {chart_id} wasn't built by Nova")
-        params = json.loads(detail.get("params") or "{}")
-        data = superset.chart_data(chart_id)
-        return {"chart_id": chart_id, "title": detail["slice_name"], "viz": params.get("viz_type"),
-                "columns": data.columns, "rows": data.rows[:PREVIEW_ROWS], "row_count": data.row_count,
-                "x_axis": params.get("x_axis"), "groupby": params.get("groupby") or [],
-                "time_grain": params.get("time_grain_sqla"),
-                "format": params.get("y_axis_format") or params.get("number_format")}
 
     return app
 

@@ -117,7 +117,7 @@ class RunManager:
         context = RunContext(run_id=run_id, user_id=user_id)
         try:
             result = self._runner(context=context, thread_id=thread_id, sink=lambda e: self.record(run_id, e), **options)
-            status, stored = result.status.value, result.model_dump(mode="json", exclude={"guest_token"})
+            status, stored = result.status.value, result.model_dump(mode="json")
         except Exception:  # a run must never die silently: the UI is waiting on it
             logger.exception("run crashed", extra={"run_id": run_id})
             status, stored = RunStatus.FAILED.value, {"error": "the run crashed; it can be resumed"}

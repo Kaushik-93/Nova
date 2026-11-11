@@ -1,22 +1,4 @@
-# superset-init owns the build; the other Superset services reuse its image.
-# Building the same tag from several services at once fails.
-x-superset-image: &superset-image
-  image: nova-superset:6.1.0
-  pull_policy: never
-
-x-superset-env: &superset-env
-  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?run `make env` first}
-  SUPERSET_DATABASE_URI: postgresql+psycopg2://${METADATA_DB_USER}:${METADATA_DB_PASSWORD}@metadata-db:5432/superset
-  SUPERSET_GUEST_TOKEN_SECRET: ${SUPERSET_GUEST_TOKEN_SECRET:?run `make env` first}
-  REDIS_URL: ${REDIS_URL}
-  NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
-  SCARF_ANALYTICS: "false"
-
 x-agent-env: &agent-env
-  SUPERSET_URL: ${SUPERSET_URL}
-  SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
-  SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
-  SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
   NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
   TRINO_URL: ${TRINO_URL}
   CUBE_URL: http://cube:4000
@@ -60,10 +42,9 @@ services:
     environment:
       POSTGRES_USER: ${METADATA_DB_USER}
       POSTGRES_PASSWORD: ${METADATA_DB_PASSWORD}
-      POSTGRES_DB: superset
+      POSTGRES_DB: nova
     volumes:
       - metadata-db:/var/lib/postgresql/data
-      - ./postgres/init-metadata.sh:/docker-entrypoint-initdb.d/10-nova.sh:ro
     ports:
       - "127.0.0.1:${METADATA_DB_HOST_PORT:-15432}:5432"
     healthcheck:
@@ -72,21 +53,6 @@ services:
       timeout: 3s
       retries: 30
     mem_limit: 512m
-    restart: unless-stopped
-
-  redis:
-    image: redis:8.8.4-alpine
-    # volatile-lru only evicts keys with a TTL, so cache entries can be dropped
-    # under pressure but Celery's queues cannot.
-    command: ["redis-server", "--maxmemory", "96mb", "--maxmemory-policy", "volatile-lru", "--save", ""]
-    ports:
-      - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-    mem_limit: 128m
     restart: unless-stopped
 
   # --- Demo data sources ------------------------------------------------------
@@ -203,66 +169,6 @@ services:
     mem_limit: 1g
     restart: unless-stopped
 
-  # --- BI engine --------------------------------------------------------------
-  superset-init:
-    image: nova-superset:6.1.0
-    build:
-      context: ./superset
-    command: ["/app/nova/init.sh"]
-    environment:
-      <<: *superset-env
-      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
-      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
-      SUPERSET_TRINO_URI: trino://nova@trino:8080
-    depends_on:
-      metadata-db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: "no"
-
-  superset:
-    <<: *superset-image
-    environment:
-      <<: *superset-env
-      SERVER_WORKER_AMOUNT: "2"
-      SERVER_THREADS_AMOUNT: "8"
-      GUNICORN_TIMEOUT: "130"
-    ports:
-      - "127.0.0.1:${SUPERSET_HOST_PORT:-18088}:8088"
-    depends_on:
-      superset-init:
-        condition: service_completed_successfully
-      trino:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8088/health"]
-      interval: 5s
-      timeout: 5s
-      start_period: 30s
-      retries: 30
-    mem_limit: 1536m
-    restart: unless-stopped
-
-  superset-worker:
-    <<: *superset-image
-    command: ["celery", "--app=superset.tasks.celery_app:app", "worker", "--pool=prefork", "-O", "fair", "-c", "2"]
-    environment: *superset-env
-    # Replaces the image's healthcheck, which curls a web server the worker
-    # doesn't run. Pinging through the broker (db 6, see CeleryConfig) rather
-    # than with --app avoids loading all of Superset on every probe.
-    healthcheck:
-      test: ["CMD-SHELL", "celery --broker=redis://redis:6379/6 inspect ping -d celery@$$HOSTNAME -t 5"]
-      interval: 15s
-      timeout: 10s
-      start_period: 30s
-      retries: 5
-    depends_on:
-      superset-init:
-        condition: service_completed_successfully
-    mem_limit: 1g
-    restart: unless-stopped
-
   # --- Test runner (only with --profile test) ---------------------------------
   tests:
     <<: *tools-image
@@ -275,16 +181,11 @@ services:
       - trino-data:/trino-data
     environment:
       <<: *tools-env
-      SUPERSET_URL: ${SUPERSET_URL}
-      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
-      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
-      NOVA_UI_ORIGIN: ${NOVA_UI_ORIGIN}
       TRINO_URL: ${TRINO_URL}
-      REDIS_URL: ${REDIS_URL}
     depends_on:
-      superset:
-        condition: service_healthy
       trino:
+        condition: service_healthy
+      cube:
         condition: service_healthy
 
   agent-tests:
@@ -310,8 +211,6 @@ services:
       - trino-data:/trino-data
     depends_on:
       metadata-db:
-        condition: service_healthy
-      superset:
         condition: service_healthy
       trino:
         condition: service_healthy
@@ -349,8 +248,6 @@ services:
       - "127.0.0.1:${API_HOST_PORT:-18000}:8000"
     depends_on:
       metadata-db:
-        condition: service_healthy
-      superset:
         condition: service_healthy
       trino:
         condition: service_healthy

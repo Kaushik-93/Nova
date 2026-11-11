@@ -1,161 +1,28 @@
 """Phase 1: the real, running stack. Requires `make up`."""
 
 import os
-import time
-import uuid
 from pathlib import Path
 
 import httpx
 import psycopg
 import pymysql
 import pytest
-import redis
 import trino
 
 from seed.generate import FIRST_DAY
 from tests.conftest import connect_marketing, connect_shop, revenue_cents
 
 
-# --- Superset ----------------------------------------------------------------
+# --- Semantic layer ----------------------------------------------------------
 
-def test_superset_is_healthy(superset_url):
-    assert httpx.get(f"{superset_url}/health", timeout=10).text == "OK"
-
-
-def test_admin_can_log_in_and_is_admin(superset):
-    me = superset.get("/api/v1/me/roles/")
-    assert me.status_code == 200
-    assert "Admin" in me.json()["result"]["roles"]
+def test_cube_is_up_and_only_reachable_inside_the_network():
+    """Only Nova's API talks to Cube, so it publishes no port to the host."""
+    assert httpx.get("http://cube:4000/readyz", timeout=10).status_code == 200
 
 
-def test_wrong_password_is_rejected(superset_url):
-    response = httpx.post(f"{superset_url}/api/v1/security/login", timeout=10, json={
-        "username": os.environ["SUPERSET_ADMIN_USER"], "password": "wrong", "provider": "db",
-    })
-    assert response.status_code == 401
-
-
-def test_trino_is_registered_read_only(superset, trino_database_id):
-    database = superset.get(f"/api/v1/database/{trino_database_id}").json()["result"]
-    assert database["backend"] == "trino"
-    assert database["allow_dml"] is False
-    assert database["allow_ctas"] is False
-    assert database["allow_run_async"] is True
-
-
-def _sqllab(superset, database_id, sql, *, run_async):
-    return superset.post("/api/v1/sqllab/execute/", json={
-        "database_id": database_id,
-        "sql": sql,
-        "runAsync": run_async,
-        "client_id": uuid.uuid4().hex[:10],
-    })
-
-
-CROSS_SOURCE_SQL = """
-    SELECT c.channel_code, COUNT(*) AS orders
-    FROM demo_shop.shop.orders o
-    JOIN demo_marketing.marketing.campaigns c
-      ON UPPER(REPLACE(o.utm_campaign, '-', '_')) = c.campaign_code
-    GROUP BY 1 ORDER BY 2 DESC
-"""
-
-
-def test_superset_runs_a_cross_source_query_through_trino(superset, trino_database_id):
-    response = _sqllab(superset, trino_database_id, CROSS_SOURCE_SQL, run_async=False)
-    assert response.status_code == 200, response.text
-    assert {row["channel_code"] for row in response.json()["data"]} >= {"google_ads", "meta_ads"}
-
-
-def test_async_queries_run_on_the_celery_worker(superset, trino_database_id):
-    started = _sqllab(superset, trino_database_id, "SELECT COUNT(*) AS n FROM demo_shop.shop.orders", run_async=True)
-    assert started.status_code == 202, started.text
-    query_id = started.json()["query"]["queryId"]
-
-    deadline = time.monotonic() + 60
-    state = None
-    while time.monotonic() < deadline:
-        query = superset.get(f"/api/v1/query/{query_id}")
-        assert query.status_code == 200, query.text
-        state = query.json()["result"]["status"]
-        if state in {"success", "failed", "stopped"}:
-            break
-        time.sleep(1)
-    assert state == "success"
-    assert query.json()["result"]["rows"] == 1
-
-
-# --- Embedding ---------------------------------------------------------------
-
-@pytest.fixture
-def embedded_dashboard(superset, ui_origin):
-    created = superset.post("/api/v1/dashboard/", json={
-        "dashboard_title": f"phase1-embed-{uuid.uuid4().hex[:8]}", "published": True,
-    })
-    assert created.status_code == 201, created.text
-    dashboard_id = created.json()["id"]
-    embedded = superset.post(f"/api/v1/dashboard/{dashboard_id}/embedded", json={"allowed_domains": [ui_origin]})
-    assert embedded.status_code == 200, embedded.text
-    yield {"id": dashboard_id, "embed_uuid": embedded.json()["result"]["uuid"]}
-    superset.delete(f"/api/v1/dashboard/{dashboard_id}")
-
-
-def test_ui_origin_can_frame_an_embedded_dashboard(superset_url, ui_origin, embedded_dashboard):
-    url = f"{superset_url}/embedded/{embedded_dashboard['embed_uuid']}"
-    response = httpx.get(url, headers={"Referer": f"{ui_origin}/builder"}, timeout=30)
-
-    assert response.status_code == 200
-    assert "x-frame-options" not in response.headers
-    directives = dict(
-        part.strip().split(" ", 1)
-        for part in response.headers["content-security-policy"].split(";") if " " in part.strip()
-    )
-    assert ui_origin in directives["frame-ancestors"].split()
-
-
-def test_other_origins_cannot_load_an_embedded_dashboard(superset_url, embedded_dashboard):
-    url = f"{superset_url}/embedded/{embedded_dashboard['embed_uuid']}"
-    response = httpx.get(url, headers={"Referer": "https://evil.example/"}, timeout=30)
-    assert response.status_code == 403
-
-
-def test_guest_token_is_issued_and_opens_the_dashboard(superset, superset_url, embedded_dashboard):
-    response = superset.post("/api/v1/security/guest_token/", json={
-        "user": {"username": "phase1-guest"},
-        "resources": [{"type": "dashboard", "id": embedded_dashboard["embed_uuid"]}],
-        "rls": [],
-    })
-    assert response.status_code == 200, response.text
-    token = response.json()["token"]
-
-    guest = httpx.get(f"{superset_url}/api/v1/dashboard/{embedded_dashboard['id']}",
-                      headers={"X-GuestToken": token}, timeout=30)
-    assert guest.status_code == 200, guest.text
-
-
-def test_guest_token_gives_no_access_to_other_dashboards(superset, superset_url, embedded_dashboard):
-    other = superset.post("/api/v1/dashboard/", json={"dashboard_title": f"phase1-private-{uuid.uuid4().hex[:8]}"})
-    assert other.status_code == 201
-    other_id = other.json()["id"]
-    try:
-        token = superset.post("/api/v1/security/guest_token/", json={
-            "user": {"username": "phase1-guest"},
-            "resources": [{"type": "dashboard", "id": embedded_dashboard["embed_uuid"]}],
-            "rls": [],
-        }).json()["token"]
-        guest = httpx.get(f"{superset_url}/api/v1/dashboard/{other_id}", headers={"X-GuestToken": token}, timeout=30)
-        assert guest.status_code in {403, 404}
-    finally:
-        superset.delete(f"/api/v1/dashboard/{other_id}")
-
-
-def test_cors_allows_only_the_ui_origin(superset_url, ui_origin):
-    url = f"{superset_url}/api/v1/security/csrf_token/"
-    allowed = httpx.options(url, headers={"Origin": ui_origin, "Access-Control-Request-Method": "GET"}, timeout=10)
-    blocked = httpx.options(url, headers={"Origin": "https://evil.example",
-                                          "Access-Control-Request-Method": "GET"}, timeout=10)
-    assert allowed.headers.get("access-control-allow-origin") == ui_origin
-    assert "access-control-allow-origin" not in blocked.headers
+def test_cube_refuses_a_request_without_a_token_from_nova():
+    response = httpx.get("http://cube:4000/cubejs-api/v1/meta", timeout=10)
+    assert response.status_code >= 400 and "cubes" not in response.text
 
 
 # --- Demo sources ------------------------------------------------------------
@@ -324,12 +191,3 @@ def test_a_source_can_be_added_with_no_secret_in_the_sql_and_no_restart(trino_cu
         trino_cursor.execute("DROP CATALOG IF EXISTS phase1_probe")
         trino_cursor.fetchall()
         secret_file.unlink(missing_ok=True)
-
-
-# --- Redis -------------------------------------------------------------------
-
-def test_superset_uses_redis_for_results_and_rate_limits():
-    client = redis.Redis.from_url(os.environ["REDIS_URL"])
-    assert client.ping()
-    used = [db for db in (4, 5, 6, 7) if redis.Redis.from_url(f"redis://redis:6379/{db}").dbsize()]
-    assert used, "expected Superset to have written to at least one of its Redis databases"

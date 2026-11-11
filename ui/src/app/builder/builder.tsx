@@ -1,21 +1,22 @@
 "use client";
 
-import { ArrowUp, CheckCircle2, ExternalLink, Filter, Loader2, Maximize2, Minimize2, Plus, ShieldAlert, TriangleAlert } from "lucide-react";
+import { ArrowUp, CheckCircle2, Filter, Loader2, Maximize2, Minimize2, Plus, ShieldAlert, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Welcome } from "@/app/builder/welcome";
-import { DashboardEmbed, type FilterSelection } from "@/components/dashboard-embed";
-import { CanvasPlaceholder, LiveCanvas } from "@/components/live-canvas";
+import type { FilterSelection } from "@/components/dashboard";
+import { CanvasPlaceholder, LiveCanvas, PendingCharts } from "@/components/live-canvas";
 import { PlanCard } from "@/components/plan-card";
 import { ProgressSteps } from "@/components/progress-steps";
 import { RunTimeline } from "@/components/run-timeline";
+import { Sheet } from "@/components/sheet";
 import { EmptyState, ErrorState, Loading } from "@/components/states";
 import { TimingPanel } from "@/components/timing-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, type Config, type DashboardRow, type Plan, type RunListItem } from "@/lib/api";
+import { api, type DashboardRow, type Plan, type RunListItem } from "@/lib/api";
 import { toMilestones, toStages } from "@/lib/steps";
 import { useNow, useRun } from "@/lib/use-run";
 import { cn } from "@/lib/utils";
@@ -53,10 +54,8 @@ export function Builder() {
   const [requireApproval, setRequireApproval] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<FilterSelection>([]);
-  const [config, setConfig] = useState<Config | null>(null);
   const [wide, setWide] = useState(false);
   const [tab, setTab] = useState<Tab>("progress");
-  const [loadedEmbed, setLoadedEmbed] = useState<string | null>(null);
   const answer = useRef<HTMLTextAreaElement>(null);
   const { events, run, lost } = useRun(runId);
 
@@ -71,19 +70,15 @@ export function Builder() {
   // The plan and dashboard arrive as events, so they appear while the agent is still working.
   const livePlan = useMemo(() => events.findLast((event) => event.event === "plan")?.plan, [events]);
   const plan = result?.plan ?? livePlan;
-  const liveSlug = useMemo(() => events.find((event) => event.event === "dashboard_ready")?.slug, [events]);
+  const liveSlug = useMemo(() => events.find((event) => event.slug && (event.event === "chart_ready" || event.event === "dashboard_ready"))?.slug, [events]);
   const [knownSlug, setKnownSlug] = useState<string | null>(null);
   const slug = result?.dashboard_slug ?? liveSlug ?? knownSlug;
   const title = result?.title ?? events.find((event) => event.event === "dashboard_ready")?.title ?? plan?.title;
 
-  // Charts changed after the embed opened, so show the final version once the run ends.
-  const firstDashboard = events.findIndex((event) => event.event === "dashboard_ready");
-  const revisions = firstDashboard < 0 ? 0 : events.slice(firstDashboard + 1).filter((event) => event.event === "chart_ready" || event.event === "dashboard_updated").length;
-  const embedKey = `${slug}:${running ? 0 : revisions}`;
-  const embedLoaded = loadedEmbed === embedKey;
-  const markLoaded = useCallback(() => setLoadedEmbed(embedKey), [embedKey]);
-
-  useEffect(() => { api.config().then(setConfig).catch(() => undefined); }, []);
+  // Every chart and layout change is saved as it happens, so the dashboard is redrawn after each one,
+  // and once more when the run ends.
+  const changes = events.filter((event) => ["chart_ready", "dashboard_ready", "dashboard_updated"].includes(event.event)).length;
+  const version = changes + (running ? 0 : 1);
 
   const loadHistory = useCallback((thread: string) => {
     api.listRuns(thread).then((runs) => {
@@ -257,22 +252,17 @@ export function Builder() {
             <Button size="sm" variant="ghost" onClick={() => setWide(!wide)}>
               {wide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />} {wide ? "Show assistant" : "Full width"}
             </Button>
-            {slug && config?.superset_url && (
-              <a className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-                href={`${config.superset_url}/superset/dashboard/${slug}/`} target="_blank" rel="noreferrer">
-                Open in Superset <ExternalLink className="size-3" />
-              </a>
-            )}
           </div>
         </header>
 
-        <div className="relative min-h-0 flex-1">
-          {slug && <DashboardEmbed key={embedKey} slug={slug} onSelection={setSelection} onLoaded={markLoaded} />}
-          {(showBuild && !embedLoaded) && (
-            <div className="absolute inset-0 z-10 overflow-auto bg-background">
-              {plan ? <LiveCanvas plan={plan} events={events} /> : <CanvasPlaceholder />}
-            </div>
+        <div className="relative min-h-0 flex-1 overflow-auto">
+          {slug && (
+            <>
+              <Sheet slug={slug} version={version} onSelection={setSelection} />
+              {running && plan && <PendingCharts plan={plan} events={events} />}
+            </>
           )}
+          {!slug && showBuild && (plan ? <LiveCanvas plan={plan} events={events} /> : <CanvasPlaceholder />)}
           {!slug && !showBuild && (
             <div className="flex h-full items-center justify-center">
               {runId && !run ? <Loading /> : <EmptyState title="No dashboard yet">{result?.error ?? "Ask for one on the left."}</EmptyState>}

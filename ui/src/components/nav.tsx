@@ -1,58 +1,116 @@
 "use client";
 
-import { BookOpen, Database, FolderOpen, LogOut, Sparkles, Users } from "lucide-react";
+import { Database, FolderOpen, Library, LogOut, Moon, Sparkles, Sun, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { ThemeToggle } from "@/components/theme-toggle";
-import { Button } from "@/components/ui/button";
 import { api, type Role } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useTheme } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
-const LINKS: { href: string; label: string; icon: typeof Sparkles; roles: Role[] }[] = [
-  { href: "/builder", label: "Build", icon: Sparkles, roles: ["admin", "analyst"] },
-  { href: "/projects", label: "Projects", icon: FolderOpen, roles: ["admin", "analyst", "viewer"] },
-  { href: "/skills", label: "Skills", icon: BookOpen, roles: ["admin"] },
-  { href: "/sources", label: "Sources", icon: Database, roles: ["admin"] },
-  { href: "/users", label: "People", icon: Users, roles: ["admin"] },
+type Item = { href: string; label: string; icon: typeof Sparkles; roles: Role[] };
+
+const GROUPS: Item[][] = [
+  [
+    { href: "/builder", label: "Build a dashboard", icon: Sparkles, roles: ["admin", "analyst"] },
+    { href: "/projects", label: "Projects", icon: FolderOpen, roles: ["admin", "analyst", "viewer"] },
+    { href: "/catalog", label: "Catalog", icon: Library, roles: ["admin", "analyst"] },
+  ],
+  [
+    { href: "/sources", label: "Sources", icon: Database, roles: ["admin"] },
+    { href: "/users", label: "People", icon: Users, roles: ["admin"] },
+  ],
 ];
+
+/** A square rail button with its label in a tooltip, which also names it for screen readers. */
+function RailButton({ label, active, children, ...props }: { label: string; active?: boolean; children: ReactNode }
+  & ({ href: string; onClick?: never } | { href?: never; onClick: () => void })) {
+  const className = cn("group relative flex size-10 items-center justify-center rounded-lg text-muted-foreground transition-colors",
+    "hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary",
+    active && "bg-accent text-primary hover:bg-accent hover:text-primary");
+  const tip = (
+    <span role="tooltip" className="pointer-events-none absolute left-full z-50 ml-2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-xs font-medium text-background opacity-0 shadow-raised transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+      {label}
+    </span>
+  );
+  return "href" in props && props.href ? (
+    <Link href={props.href} aria-label={label} aria-current={active ? "page" : undefined} className={className}>{children}{tip}</Link>
+  ) : (
+    <button type="button" aria-label={label} onClick={props.onClick} className={className}>{children}{tip}</button>
+  );
+}
+
+function initials(name: string) {
+  const parts = name.replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean);
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2)).toUpperCase();
+}
+
+function Account() {
+  const { user, signOut } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [model, setModel] = useState<string | null>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => { api.config().then((config) => setModel(config.model)).catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent ? event.key === "Escape" : !menu.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", close); };
+  }, [open]);
+
+  return (
+    <div ref={menu} className="relative">
+      <button type="button" aria-label="Account" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="flex size-9 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-primary focus-visible:outline-2 focus-visible:outline-primary">
+        {initials(user.display_name || user.email)}
+      </button>
+      {open && (
+        <div role="menu" className="absolute bottom-0 left-full z-50 ml-2 w-60 rounded-xl border border-border bg-card p-1.5 shadow-raised">
+          <div className="px-2.5 py-2">
+            <p className="truncate text-[13px] font-medium">{user.display_name || user.email}</p>
+            <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+            <p className="mt-1 text-[11px] capitalize text-muted-foreground">{user.role}{model && <> · {model}</>}</p>
+          </div>
+          <div className="my-1 border-t border-border" />
+          <button role="menuitem" type="button" onClick={signOut}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground">
+            <LogOut className="size-4" /> Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Nav() {
   const path = usePathname();
-  const { user, signOut } = useAuth();
-  const [model, setModel] = useState<string | null>(null);
-  useEffect(() => { api.config().then((config) => setModel(config.model)).catch(() => undefined); }, []);
+  const { user } = useAuth();
+  const { dark, toggle } = useTheme();
+  const groups = GROUPS.map((group) => group.filter((item) => item.roles.includes(user.role))).filter((group) => group.length);
 
   return (
-    <aside className="flex w-52 shrink-0 flex-col border-r border-border bg-card">
-      <Link href="/builder" className="flex h-14 items-center gap-2.5 px-4">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-[13px] font-bold text-primary-foreground">N</span>
-        <span className="text-[15px] font-semibold tracking-tight">Nova</span>
-      </Link>
-      <nav className="flex flex-1 flex-col gap-0.5 px-2.5 pt-1">
-        {LINKS.filter((link) => link.roles.includes(user.role)).map(({ href, label, icon: Icon }) => {
-          const active = path.startsWith(href);
-          return (
-            <Link key={href} href={href} aria-current={active ? "page" : undefined}
-              className={cn("flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-                active && "bg-accent text-primary hover:bg-accent hover:text-primary")}>
-              <Icon className="size-4" /> {label}
-            </Link>
-          );
-        })}
+    <aside className="flex w-[60px] shrink-0 flex-col items-center border-r border-border bg-rail py-3" aria-label="Main">
+      <Link href={user.role === "viewer" ? "/projects" : "/builder"} aria-label="Nova home"
+        className="mb-3 flex size-9 items-center justify-center rounded-xl bg-primary text-[15px] font-bold text-primary-foreground">N</Link>
+      <nav className="flex flex-1 flex-col items-center gap-1">
+        {groups.map((group, index) => (
+          <div key={index} className={cn("flex flex-col items-center gap-1", index > 0 && "mt-2 border-t border-border pt-3")}>
+            {group.map(({ href, label, icon: Icon }) => (
+              <RailButton key={href} href={href} label={label} active={path.startsWith(href)}><Icon className="size-[18px]" /></RailButton>
+            ))}
+          </div>
+        ))}
       </nav>
-      <div className="flex items-center gap-1 border-t border-border px-3 py-2">
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-medium" title={user.email}>{user.display_name || user.email}</p>
-          <p className="text-[11px] capitalize text-muted-foreground">{user.role}</p>
-        </div>
-        <Button variant="ghost" size="icon" onClick={signOut} aria-label="Sign out" title="Sign out"><LogOut className="size-4" /></Button>
-      </div>
-      <div className="flex items-center justify-between border-t border-border px-3 py-2.5">
-        <span className="truncate text-[11px] text-muted-foreground" title="The model doing the work">{model}</span>
-        <ThemeToggle />
+      <div className="flex flex-col items-center gap-2">
+        <RailButton label={dark ? "Light mode" : "Dark mode"} onClick={toggle}>
+          {dark ? <Sun className="size-[18px]" /> : <Moon className="size-[18px]" />}
+        </RailButton>
+        <Account />
       </div>
     </aside>
   );

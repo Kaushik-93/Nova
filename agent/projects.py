@@ -1,4 +1,4 @@
-"""Projects hold sheets, and each sheet is one Superset dashboard.
+"""Projects hold sheets, and each sheet is one dashboard.
 
 A project is what people share and find things by. The rules are here rather than in the API
 because the agent's runs depend on them too.
@@ -23,7 +23,6 @@ ADMIN = "admin"
 class Sheet(BaseModel):
     slug: str
     thread_id: str
-    superset_id: int
     name: str
     title: str
     summary: str = ""
@@ -60,7 +59,7 @@ def can_edit(project: Project, *, email: str, role: str) -> bool:
 
 
 def can_view_sheet(project: Project, sheet: Sheet, *, email: str, role: str, granted: set[str]) -> bool:
-    """Whether someone can see that a sheet exists. Which rows they then get is the guest token's job."""
+    """Whether someone can see that a sheet exists. Which rows they then get is Cube's job."""
     if role == ADMIN:
         return True
     owner = project.created_by == email
@@ -84,12 +83,12 @@ def load_projects(pool: ConnectionPool, *, slug: str | None = None) -> list[Proj
                 FROM projects p {where} ORDER BY p.updated_at DESC""", values).fetchall()
         wanted = [row[0] for row in projects]
         sheets = conn.execute(
-            """SELECT project_id::text, slug, thread_id, superset_id, COALESCE(sheet_name, title), title, summary, position,
+            """SELECT project_id::text, slug, thread_id, COALESCE(sheet_name, title), title, summary, position,
                       created_by, catalogs, updated_at
                FROM dashboards WHERE project_id = ANY(%s::uuid[]) ORDER BY position, created_at""", (wanted,)).fetchall()
     keys = ("id", "slug", "name", "description", "created_by", "shared", "created_at", "updated_at")
     found = {row[0]: Project(**dict(zip(keys, row))) for row in projects}
-    sheet_keys = ("slug", "thread_id", "superset_id", "name", "title", "summary", "position", "created_by", "catalogs", "updated_at")
+    sheet_keys = ("slug", "thread_id", "name", "title", "summary", "position", "created_by", "catalogs", "updated_at")
     for row in sheets:
         found[row[0]].sheets.append(Sheet(**dict(zip(sheet_keys, row[1:]))))
     return list(found.values())

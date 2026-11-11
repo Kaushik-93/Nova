@@ -11,12 +11,12 @@ from pydantic import BaseModel
 
 from agent.api.auth import User, current_user, require_admin
 from agent.harness.access import load_access
-from agent.harness.audit import AuditKind, AuditStatus, RunContext
+from agent.harness.audit import RunContext
 from agent.harness.budgets import BudgetLimits, RunBudget
 from agent.harness.guardrails import IDENTIFIER
 from agent.semantic.access import Tenancy, tenancy_of, unlimitable
 from agent.subagents.profiler import generate_skill
-from agent.tools.connectors import (CONNECTORS, Connection, create_catalog_sql, encrypt_credentials, superset_uri,
+from agent.tools.connectors import (CONNECTORS, Connection, create_catalog_sql, encrypt_credentials,
                                     test_connection, write_credentials)
 from agent.tools.profiler import suggest_tenancy
 from agent.tools.skill_store import skill_slug
@@ -71,12 +71,6 @@ def connect_job(services: Any, *, source: Source, connection: Connection, contex
             conn.execute("UPDATE sources SET status = %s WHERE id = %s", (value, source.id))
 
     try:
-        step("superset")
-        database_id = services.superset.ensure_database(connection.name, superset_uri(connection))
-        services.audit.record(context, AuditKind.SUPERSET_WRITE, AuditStatus.OK, target=f"database {connection.name}")
-        with services.pool.connection() as conn:
-            conn.execute("UPDATE sources SET superset_database_id = %s WHERE id = %s", (database_id, source.id))
-
         step("catalog")
         if source.trino_catalog not in catalogs_in_trino(services, context):
             write_credentials(connection, catalog=source.trino_catalog, directory=settings.nova_trino_secrets_dir)

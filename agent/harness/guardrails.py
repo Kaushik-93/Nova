@@ -84,7 +84,7 @@ class GuardedQuery:
 
 
 def scope_clause(column: str, values: tuple[str, ...] | list[str], *, numeric: bool) -> str:
-    """A WHERE condition for a row scope, shared by the SQL rewrite and Superset guest tokens.
+    """A WHERE condition for a row scope, used by the SQL rewrite.
 
     The column comes from an admin and the values from the database, but this text goes into
     SQL, so neither is trusted: the identifier must be plain, numbers must be numbers, and
@@ -103,8 +103,8 @@ def scope_clause(column: str, values: tuple[str, ...] | list[str], *, numeric: b
 def guard(sql: str, policy: SqlPolicy, *, dialect: str = TRINO, add_limit: bool = True) -> GuardedQuery:
     """Validate `sql` and return a safe, LIMITed, comment-free version of it.
 
-    `add_limit=False` is for SQL stored as a virtual dataset: Superset adds the limit
-    itself when charts query it, and a LIMIT in the dataset would silently cut totals.
+    `add_limit=False` is for SQL that's stored rather than run, such as a cube's own SQL: whatever
+    queries it adds its own limit, and a LIMIT inside it would silently cut totals.
     Raises SqlRejected, with a reason the agent can act on.
     """
     if len(sql) > MAX_SQL_LENGTH:

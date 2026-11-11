@@ -13,11 +13,11 @@ from pydantic import ValidationError
 
 from agent.api.auth import ALGORITHM, LoginThrottle, MAX_FAILURES, check_secret, issue_token, sso_refusal
 from agent.config import Settings
-from agent.harness.access import Grant, UserAccess, build_policy, guest_rules, make_skills_view
+from agent.harness.access import Grant, UserAccess, build_policy, make_skills_view
 from agent.harness.errors import PermissionFailure
 from agent.tools import connectors
 from agent.tools.connectors import (Connection, create_catalog_sql, decrypt_credentials, encrypt_credentials,
-                                    superset_uri, write_credentials)
+                                    write_credentials)
 from agent.tools.profiler import ColumnProfile, TableProfile, suggest_tenancy
 from agent.tools.sources import Source
 
@@ -103,43 +103,6 @@ def test_admin_and_the_command_line_are_not_limited():
     for access in (ADMIN, None):
         policy = build_policy([rental()], access, STORE)
         assert policy.allowed_catalogs == {"rental_db"} and policy.row_scopes == {}
-
-
-# --- Guest tokens -----------------------------------------------------------------------------
-
-def test_guest_rules_carry_the_users_tenants():
-    assert guest_rules(user(r=["7"]), [rental()], ["rental_db"], STORE) == [{"clause": "tenant_id IN (7)"}]
-
-
-def test_guest_rules_for_no_tenants_show_nothing():
-    assert guest_rules(user(r=[]), [rental()], ["rental_db"], STORE) == [{"clause": "1 = 0"}]
-
-
-def test_guest_rules_for_a_whole_source_grant_are_empty():
-    assert guest_rules(user(r=None), [rental()], ["rental_db"], STORE) == []
-
-
-def test_admin_has_no_guest_rules():
-    assert guest_rules(ADMIN, [rental()], ["rental_db"], STORE) == []
-
-
-@pytest.mark.parametrize("access, catalogs", [
-    (user(), ["rental_db"]),                      # not granted
-    (user(r=["1"]), ["rental_db", "shop_db"]),    # one of two isn't granted
-    (user(r=["1"]), ["vanished_db"]),             # the source is gone
-    (user(r=["1"]), []),                          # no record of what it's built on
-])
-def test_guest_rules_refuse_what_they_cant_vouch_for(access, catalogs):
-    with pytest.raises(PermissionFailure):
-        guest_rules(access, [rental(), shop()], catalogs, STORE)
-
-
-def test_guest_rules_refuse_sources_limited_by_different_columns():
-    """One rule applies to every dataset, so two different limits can't be expressed."""
-    other = rental(id="o", slug="other", trino_catalog="other_db", tenant_column="org_id")
-    store = Store(table("rentals", ("tenant_id", "integer"), ("org_id", "integer")))
-    with pytest.raises(PermissionFailure):
-        guest_rules(user(r=["1"], o=["2"]), [rental(), other], ["rental_db", "other_db"], store)
 
 
 # --- The skills a user's agent can read -------------------------------------------------------
@@ -235,7 +198,7 @@ def test_login_throttle_doesnt_remember_made_up_emails():
 # --- SSO --------------------------------------------------------------------------------------
 
 def settings(**changes) -> Settings:
-    return Settings(superset_url="http://x", superset_admin_user="a", superset_admin_password="b", **changes)
+    return Settings(**changes)
 
 
 def test_sso_needs_an_email_and_a_subject():
@@ -286,11 +249,6 @@ def test_a_password_cant_add_settings_to_the_credentials_file(tmp_path):
 def test_the_credentials_file_is_private(tmp_path):
     write_credentials(connection(), catalog="src_prod", directory=str(tmp_path))
     assert stat.S_IMODE((tmp_path / "src_prod.properties").stat().st_mode) == 0o600
-
-
-def test_superset_uri_escapes_the_password():
-    uri = superset_uri(connection(password="p@ss/word:1"))
-    assert uri == "postgresql+psycopg2://reader:p%40ss%2Fword%3A1@db.internal:5432/app"
 
 
 def test_credentials_are_encrypted_and_come_back_intact():

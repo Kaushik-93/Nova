@@ -47,7 +47,7 @@ def main() -> int:
     print(f"\nStatus: {result.status.value}")
     if result.title:
         print(f"Dashboard: {result.title}")
-        print(f"Open it: {settings.superset_public_url}/superset/dashboard/{result.dashboard_slug}/")
+        print(f"Open it: {settings.nova_ui_origin}/dashboards/{result.dashboard_slug}")
     if result.summary:
         print(f"\n{result.summary}")
     for definition in result.definitions:

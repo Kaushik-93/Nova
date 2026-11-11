@@ -281,3 +281,26 @@ def test_the_api_refuses_what_cant_be_limited_and_exports_only_their_rows(tenant
                                                                        "measures": [f"{names['invoices']}.count"]}})
     assert exported.status_code == 200
     assert {line.split(",")[0] for line in exported.text.strip().splitlines()[1:]} == set(MINE)
+
+
+def test_a_runs_queries_through_cube_are_audited_with_their_refusals(pool, published, names):
+    from agent.harness.audit import AuditLog, RunContext
+    from agent.semantic.client import AuditedCubeClient
+
+    settings = get_settings()
+    context = RunContext(run_id=f"test-audit-{uuid.uuid4().hex[:10]}", user_id="tenant@nova.test")
+    audit = AuditLog(pool)
+    client = AuditedCubeClient(settings.cube_url, settings.cubejs_api_secret, audit=audit, context=context)
+    try:
+        assert by_tenant(client, limited(), names)
+        with pytest.raises(PermissionFailure):
+            client.load(limited(), {"measures": [f"{names['lines']}.count"]})
+    finally:
+        client.close()
+    ok, refused = audit.for_run(context.run_id)
+    assert (ok["kind"], ok["status"], ok["target"], ok["user_id"]) == ("semantic_query", "ok", names["invoices"],
+                                                                        "tenant@nova.test")
+    assert ok["rows"] == 2 and f"{names['invoices']}.count" in ok["statement"]
+    assert ok["detail"]["scopes"] == {CATALOG: MINE}
+    assert (refused["kind"], refused["status"], refused["target"]) == ("semantic_query", "rejected", names["lines"])
+    assert refused["detail"]["reason"]

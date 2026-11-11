@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -83,20 +82,6 @@ def refuse_if_running(services: Any, sheets: list[Sheet]) -> None:
         raise HTTPException(409, "the agent is working on this; wait for it to finish")
 
 
-def remove_from_superset(services: Any, sheet: Sheet) -> None:
-    """Remove what a sheet built, which is everything named after it. Safe to repeat if it stopped
-    part-way, because something already gone isn't an error."""
-    superset = services.superset
-    with contextlib.suppress(NotFound):
-        superset.delete_dashboard(sheet.superset_id)
-    for dataset in superset.datasets_named(f"{sheet.slug}__"):
-        for chart in superset.charts_on_dataset(dataset.id):
-            with contextlib.suppress(NotFound):
-                superset.delete_chart(chart.id)
-        with contextlib.suppress(NotFound):
-            superset.delete_dataset(dataset.id)
-
-
 @router.get("")
 def list_projects(request: Request, user: User = Depends(current_user)) -> list[dict[str, Any]]:
     services = request.app.state.services
@@ -138,8 +123,6 @@ def delete_project(slug: str, request: Request, user: User = Depends(current_use
     services = request.app.state.services
     project = editable_project(services, slug, user)
     refuse_if_running(services, project.sheets)
-    for sheet in project.sheets:
-        remove_from_superset(services, sheet)
     with services.pool.connection() as conn, conn.transaction():
         conn.execute("DELETE FROM dashboards WHERE project_id = %s", (project.id,))
         conn.execute("DELETE FROM projects WHERE id = %s", (project.id,))
@@ -180,7 +163,6 @@ def delete_sheet(slug: str, sheet: str, request: Request, user: User = Depends(c
     project = editable_project(services, slug, user)
     found = find_sheet(project, sheet)
     refuse_if_running(services, [found])
-    remove_from_superset(services, found)
     with services.pool.connection() as conn:
         conn.execute("DELETE FROM dashboards WHERE slug = %s", (found.slug,))
     return {"deleted": True}

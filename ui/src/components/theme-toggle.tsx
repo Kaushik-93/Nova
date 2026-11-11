@@ -1,26 +1,24 @@
 "use client";
 
-import { Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { Button } from "@/components/ui/button";
-
-export function ThemeToggle() {
+/** Light or dark, remembered in this browser. Charts listen for `nova-theme` to redraw. */
+export function useTheme() {
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
-    setDark(localStorage.getItem("theme") === "dark");
+    try { setDark(localStorage.getItem("theme") === "dark"); } catch { /* storage blocked: stay light */ }
   }, []);
 
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    localStorage.setItem("theme", dark ? "dark" : "light");
-    window.dispatchEvent(new CustomEvent("nova-theme", { detail: dark }));
-  }, [dark]);
+  const toggle = useCallback(() => {
+    setDark((current) => {
+      const next = !current;
+      document.documentElement.classList.toggle("dark", next);
+      try { localStorage.setItem("theme", next ? "dark" : "light"); } catch { /* not remembered, still applied */ }
+      window.dispatchEvent(new CustomEvent("nova-theme", { detail: next }));
+      return next;
+    });
+  }, []);
 
-  return (
-    <Button variant="ghost" size="icon" aria-label="Toggle dark mode" onClick={() => setDark(!dark)}>
-      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-    </Button>
-  );
+  return { dark, toggle };
 }

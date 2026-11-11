@@ -13,7 +13,6 @@ from agent.harness.errors import BudgetExceeded, QueryFailure, QueryTimedOut, Qu
 from agent.harness.executor import CostLimits, SqlExecutor
 from agent.harness.guardrails import SqlPolicy
 from agent.harness.untrusted import wrap_untrusted
-from agent.tools.superset_client import SupersetClient
 
 pytestmark = pytest.mark.integration
 
@@ -168,24 +167,5 @@ def test_no_password_reaches_the_audit_log(executor, audit, context, budget, poo
     executor.run(f"SELECT 1 FROM {ORDERS}", policy=POLICY, context=context, budget=budget)
     settings = get_settings()
     text = str(audit.for_run(context.run_id))
-    assert settings.superset_admin_password not in text
+    assert settings.cubejs_api_secret not in text and settings.nova_jwt_secret not in text
     assert "connection-password" not in text
-
-
-def test_superset_writes_are_reported_for_the_audit_log(audit, context):
-    settings = get_settings()
-
-    def on_write(method, path, status):
-        audit.record(context, AuditKind.SUPERSET_WRITE, AuditStatus.OK if status < 400 else AuditStatus.FAILED,
-                     target=f"{method} {path}", detail={"status": status})
-
-    with SupersetClient(settings.superset_url, settings.superset_admin_user, settings.superset_admin_password,
-                        on_write=on_write) as superset:
-        slug = f"audit-{uuid.uuid4().hex[:8]}"
-        dashboard = superset.ensure_dashboard(slug=slug, title="Audit test")
-        superset.delete_dashboard(dashboard.id)
-
-    targets = [e["target"] for e in audit.for_run(context.run_id)]
-    assert targets[0] == "POST /api/v1/dashboard/"
-    assert f"DELETE /api/v1/dashboard/{dashboard.id}" in targets
-    assert not any("security/login" in t for t in targets), "logging in isn't a write"

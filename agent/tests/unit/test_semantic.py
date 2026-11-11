@@ -209,3 +209,21 @@ def test_pruning_drops_exactly_what_failed():
     assert pruned.cube("rent__invoices").joins == []
     assert pruned.cube("rent__notes") is None
     assert len(notes) == 3
+
+
+def test_only_counts_and_sums_are_marked_as_adding_up_to_a_total():
+    from agent.semantic.describe import annotate
+
+    model = DataModel(cubes=[cube(measures=[Measure(name="billed", type="sum", sql="{CUBE}.total"),
+                                            Measure(name="count", type="count"),
+                                            Measure(name="customers", type="count_distinct", sql="{CUBE}.customer_id"),
+                                            Measure(name="average", type="avg", sql="{CUBE}.total")])])
+    notes = {name: {"title": name, "type": "number"} for name in
+             ("rent__invoices.billed", "rent__invoices.count", "rent__invoices.customers", "rent__invoices.average",
+              "elsewhere.unknown")}
+    marked = annotate({"measures": notes, "dimensions": {"rent__invoices.id": {}}}, model)
+    assert {name: note["additive"] for name, note in marked["measures"].items()} == {
+        "rent__invoices.billed": True, "rent__invoices.count": True, "rent__invoices.customers": False,
+        "rent__invoices.average": False, "elsewhere.unknown": False}
+    assert marked["measures"]["rent__invoices.billed"]["title"] == "rent__invoices.billed"
+    assert marked["dimensions"] == {"rent__invoices.id": {}}

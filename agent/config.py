@@ -11,10 +11,6 @@ class Settings(BaseSettings):
     model_provider: str = "anthropic"
     model_name: str = "claude-opus-5-5"
 
-    superset_url: str
-    superset_public_url: str = "http://localhost:18088"
-    superset_admin_user: str
-    superset_admin_password: str
     trino_url: str = "http://trino:8080"
     cube_url: str = "http://cube:4000"
     cubejs_api_secret: str = ""
@@ -23,6 +19,9 @@ class Settings(BaseSettings):
     nova_skills_dir: str = "skills"
     nova_ui_origin: str = "http://localhost:13000"
     nova_public_api_url: str = "http://localhost:18000"
+    # Where the dashboard renderer's browser really reaches the UI and the API, inside the network.
+    nova_render_ui_url: str = "http://ui:3000"
+    nova_render_api_url: str = "http://agent:8000"
     nova_trino_secrets_dir: str = "/trino-data/secrets"
 
     # Sign-in. The first admin is created from these on startup.

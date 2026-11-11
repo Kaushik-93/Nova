@@ -7,7 +7,8 @@ import { useCallback, useEffect, useState } from "react";
 import { ConnectForm } from "@/app/sources/connect-form";
 import { ConnectProgress } from "@/app/sources/connect-progress";
 import { TenancyPanel } from "@/app/sources/tenancy-panel";
-import { ErrorState, Loading, PageHeader } from "@/components/states";
+import { Page } from "@/components/page";
+import { ErrorState, Loading } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -51,10 +52,8 @@ export default function SourcesPage() {
   const waiting = demos.filter((demo) => !demo.connected);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 p-8">
-      <PageHeader title="Sources" description="The data Nova can read. Nothing here is available to anyone until you give them access under People.">
-        <Button variant="outline" size="sm" onClick={() => setAdding(!adding)}><Plus className="size-3.5" /> Connect a source</Button>
-      </PageHeader>
+    <Page title="Sources" icon={<Database className="size-4" />} width="narrow"
+      description="The data Nova can read. Nothing here is available to anyone until you give them access under People." actions={<><Button variant="outline" size="sm" onClick={() => setAdding(!adding)}><Plus className="size-3.5" /> Connect a source</Button></>}>
       {error && <ErrorState message={error} />}
       {adding && <ConnectForm onStarted={started} />}
       {jobs.map((job) => <ConnectProgress key={job.runId} runId={job.runId} name={job.name} onDone={load} />)}
@@ -83,7 +82,7 @@ export default function SourcesPage() {
                   </>
                 )}
                 {source.status === "ready" && (source.skill ? (
-                  <Link href={`/skills/${source.skill.name}`}>
+                  <Link href={`/catalog/${source.slug}`}>
                     <Badge variant={source.skill.status === "reviewed" ? "success" : "warning"}>Skill v{source.skill.version}, {source.skill.status}</Badge>
                   </Link>
                 ) : <Badge>No skill yet</Badge>)}
@@ -111,6 +110,6 @@ export default function SourcesPage() {
           </div>
         </section>
       )}
-    </div>
+    </Page>
   );
 }

@@ -1,4 +1,4 @@
-"""Projects and sheets through the API, on the real database and Superset. No model is involved."""
+"""Projects and sheets through the API, on the real database. No model is involved."""
 
 import re
 import uuid
@@ -13,7 +13,6 @@ from agent.api.main import create_app
 from agent.api.runs import RunManager
 from agent.config import get_settings
 from agent.projects import describe_for_agent, project_for_new_sheet
-from agent.tools.superset_payloads import ChartSlot, ChartSpec, Metric, Viz
 
 pytestmark = pytest.mark.integration
 
@@ -80,10 +79,10 @@ def workspace(services):
         with services.pool.connection() as conn:
             project_id = conn.execute("SELECT id FROM projects WHERE slug = %s", (project_slug,)).fetchone()[0]
             conn.execute(
-                """INSERT INTO dashboards (slug, thread_id, superset_id, embed_uuid, title, created_by, catalogs, project_id, sheet_name, position)
-                   VALUES (%s, %s, 0, %s, %s, %s, %s, %s, %s,
+                """INSERT INTO dashboards (slug, thread_id, title, created_by, catalogs, project_id, sheet_name, position)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s,
                            (SELECT COALESCE(MAX(position) + 1, 0) FROM dashboards WHERE project_id = %s))""",
-                (slug, slug, str(uuid.uuid4()), name, owner, list(catalogs), project_id, name, project_id))
+                (slug, slug, name, owner, list(catalogs), project_id, name, project_id))
         sheets.append(slug)
         return slug
 
@@ -343,35 +342,12 @@ def test_nothing_is_said_about_a_sheet_with_no_project(services):
     assert describe_for_agent(services.pool, project_id=None, sheet_slug="nova-nothing") == ""
 
 
-def superset_sheet(services, key: str) -> tuple[int, int, int]:
-    superset = services.superset
-    dataset = superset.ensure_dataset(key=key, name=f"{key}__sales", database_id=superset.database_id("Nova Trino"),
-                                      sql="SELECT status FROM demo_shop.shop.orders")
-    spec = ChartSpec(key="count", title="Orders", viz=Viz.BIG_NUMBER, metrics=[Metric(label="Orders", sql="COUNT(*)")])
-    chart = superset.ensure_chart(spec, dataset_id=dataset.id, dashboard_key=key)
-    board = superset.ensure_dashboard(slug=key, title="Test", rows=[[ChartSlot(chart_id=chart.id, title="Orders", width=12)]])
-    return board.id, chart.id, dataset.id
-
-
-def test_deleting_a_sheet_removes_what_it_built_and_nothing_else(admin, services, workspace):
+def test_deleting_a_sheet_removes_it_and_nothing_else(admin, workspace):
     project, sheet = workspace
     slug = project(admin)["slug"]
-    key = f"nova-test{uuid.uuid4().hex[:7]}"
-    bystander = f"nova-test{uuid.uuid4().hex[:7]}"
-    board, chart, dataset = superset_sheet(services, key)
-    kept = superset_sheet(services, bystander)
-    item = sheet(slug, "a@b.c")
-    with services.pool.connection() as conn:
-        conn.execute("UPDATE dashboards SET slug = %s, thread_id = %s, superset_id = %s WHERE slug = %s", (key, key, board, item))
-    try:
-        assert admin.delete(f"/api/projects/{slug}/sheets/{key}").status_code == 200
-        assert admin.get(f"/api/projects/{slug}").json()["sheets"] == []
-        assert services.superset.datasets_named(f"{key}__") == []
-        assert [found.id for found in services.superset.datasets_named(f"{bystander}__")] == [kept[2]]
-    finally:
-        services.superset.delete_dashboard(kept[0])
-        services.superset.delete_chart(kept[1])
-        services.superset.delete_dataset(kept[2])
+    gone, kept = sheet(slug, "a@b.c"), sheet(slug, "a@b.c")
+    assert admin.delete(f"/api/projects/{slug}/sheets/{gone}").status_code == 200
+    assert [s["slug"] for s in admin.get(f"/api/projects/{slug}").json()["sheets"]] == [kept]
 
 
 def test_a_sheet_the_agent_is_working_on_cant_be_deleted(admin, services, workspace):

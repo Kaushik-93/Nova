@@ -52,6 +52,14 @@ export function PlanCard({ plan, editable, onApprove, onReject }: {
           <p className="text-xs">{draft.filters.join(", ")}</p>
         </div>
       )}
+      {(draft.new_definitions?.length ?? 0) > 0 && (
+        <div>
+          <h3 className="mb-1 text-[11px] font-medium text-muted-foreground">New definitions, to be added as AI-inferred</h3>
+          <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed">
+            {draft.new_definitions?.map((definition) => <li key={definition}>{definition}</li>)}
+          </ul>
+        </div>
+      )}
       {draft.assumptions.length > 0 && (
         <div>
           <h3 className="mb-1 text-[11px] font-medium text-muted-foreground">Assumptions</h3>
